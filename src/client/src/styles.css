@@ -903,7 +903,7 @@ h1 {
 
 .book-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
   gap: 15px;
 }
 
@@ -1117,7 +1117,7 @@ h1 {
 .category-strip {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 168px;
+  grid-auto-columns: 194px;
   gap: 16px;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -1130,7 +1130,7 @@ h1 {
 }
 
 .book-strip .book-card {
-  width: 168px;
+  width: 194px;
 }
 
 .empty-dashboard {
@@ -1400,9 +1400,12 @@ h1 {
 
 .cover-button {
   display: block;
-  width: 100%;
+  width: calc(100% - 20px);
+  max-width: 174px;
   aspect-ratio: 1;
+  margin: 10px auto 0;
   overflow: hidden;
+  border-radius: 7px;
 }
 
 .book-cover {
@@ -1477,11 +1480,11 @@ h1 {
 }
 
 .book-card-body {
-  padding: 10px 8px 9px;
+  padding: 9px 10px 10px;
   display: grid;
   grid-template-rows: auto auto 1fr;
-  gap: 6px;
-  min-height: 126px;
+  gap: 5px;
+  min-height: 106px;
 }
 
 .plain-title {
@@ -1490,23 +1493,33 @@ h1 {
   color: #fff7df;
   font-size: 15px;
   min-height: 36px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.book-card p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .book-actions {
   display: flex;
   align-items: center;
   align-self: end;
-  gap: 6px;
+  gap: 5px;
   min-height: 30px;
   position: relative;
 }
 
 .book-rating-badge {
   margin-left: auto;
-  min-height: 32px;
+  min-height: 30px;
   border: 1px solid #574a39;
   border-radius: 999px;
-  padding: 0 9px;
+  padding: 0 8px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1604,7 +1617,7 @@ h1 {
   background: #2d2924;
   color: #f3f0e8;
   border-radius: 8px;
-  min-height: 30px;
+  min-height: 29px;
   padding: 0 9px;
   display: inline-flex;
   align-items: center;
@@ -1613,7 +1626,7 @@ h1 {
 }
 
 .icon-button {
-  width: 30px;
+  width: 29px;
   padding: 0;
   border-color: #51483d;
   color: #d8cdbc;
