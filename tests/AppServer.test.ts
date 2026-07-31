@@ -23,6 +23,34 @@ describe("AppServer", () => {
     await request(app).get("/api/me").set("Cookie", loginResponse.headers["set-cookie"]).expect(200);
   });
 
+  it("lets signed-in users set and change their Story Stack password", async () => {
+    const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
+    const context = new AppContext({ databasePath });
+    const app = new AppServer(context).app;
+    stubPlexAuth({ email: "reader@example.com", name: "Reader" });
+
+    await request(app).post("/api/auth/plex/start").expect(200);
+    const plexLogin = await request(app).post("/api/auth/plex/poll").send({ pinId: 123 }).expect(200);
+    const cookie = plexLogin.headers["set-cookie"];
+    expect(plexLogin.body.user.passwordConfigured).toBe(false);
+
+    const setPassword = await request(app).post("/api/me/password").set("Cookie", cookie).send({ newPassword: "first secure password" }).expect(200);
+    expect(setPassword.body.user.passwordConfigured).toBe(true);
+
+    await request(app).post("/api/auth/login").send({ username: "reader@example.com", password: "first secure password" }).expect(200);
+    await request(app)
+      .post("/api/me/password")
+      .set("Cookie", cookie)
+      .send({ currentPassword: "wrong password", newPassword: "second secure password" })
+      .expect(401);
+    await request(app)
+      .post("/api/me/password")
+      .set("Cookie", cookie)
+      .send({ currentPassword: "first secure password", newPassword: "second secure password" })
+      .expect(200);
+    await request(app).post("/api/auth/login").send({ username: "reader@example.com", password: "second secure password" }).expect(200);
+  });
+
   it("creates and accepts a Story Stack invite without Plex", async () => {
     const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
     const context = new AppContext({ databasePath });
@@ -69,6 +97,30 @@ describe("AppServer", () => {
       .send({ mode: "manual", publicUrl: "http://192.168.1.234:4100" })
       .expect(200);
     expect(remote.body.settings.status).toBe("warning");
+  });
+
+  it("lets admins set a managed user's password", async () => {
+    const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
+    const context = new AppContext({ databasePath });
+    const app = new AppServer(context).app;
+    const adminLogin = await request(app).post("/api/auth/login").send({ username: "admin", password: "admin" }).expect(200);
+    const cookie = adminLogin.headers["set-cookie"];
+
+    const userResponse = await request(app)
+      .post("/api/admin/users")
+      .set("Cookie", cookie)
+      .send({ name: "Reader Two", email: "reader-two@example.com", role: "user" })
+      .expect(201);
+    expect(userResponse.body.user.passwordConfigured).toBe(false);
+
+    const reset = await request(app)
+      .post(`/api/admin/users/${userResponse.body.user.id}/password`)
+      .set("Cookie", cookie)
+      .send({ newPassword: "reset secure password" })
+      .expect(200);
+    expect(reset.body.user.passwordConfigured).toBe(true);
+
+    await request(app).post("/api/auth/login").send({ username: "reader-two@example.com", password: "reset secure password" }).expect(200);
   });
 
   it("adds and removes a Store book from My Library through the API", async () => {

@@ -22,8 +22,21 @@ export class AuthService {
       role: credentials.role,
       status: credentials.status,
       username: credentials.username,
-      email: credentials.email
+      email: credentials.email,
+      passwordConfigured: Boolean(credentials.passwordHash)
     });
+  }
+
+  changePassword(userId: string, currentPassword: string | undefined, newPassword: string): User {
+    const existingHash = this.database.getUserPasswordHash(userId);
+    if (existingHash && !this.passwordHasher.verify(currentPassword ?? "", existingHash)) {
+      throw new Error("Current password is incorrect.");
+    }
+    return this.database.setUserPassword(userId, newPassword);
+  }
+
+  resetPassword(userId: string, newPassword: string): User {
+    return this.database.setUserPassword(userId, newPassword);
   }
 
   createSession(user: User): LoginResult {

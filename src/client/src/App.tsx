@@ -61,6 +61,9 @@ export function App() {
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent>();
   const [offlineOnly, setOfflineOnly] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState("");
   const [loginMessage, setLoginMessage] = useState("");
   const [storeBooks, setStoreBooks] = useState<Book[]>([]);
   const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
@@ -101,6 +104,7 @@ export function App() {
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRole, setNewUserRole] = useState<"admin" | "user">("user");
+  const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
   const [userMessage, setUserMessage] = useState("");
 
   const libraryIds = useMemo(() => new Set(libraryBooks.map((book) => book.id)), [libraryBooks]);
@@ -257,6 +261,26 @@ export function App() {
     await installPrompt.prompt();
     await installPrompt.userChoice;
     setInstallPrompt(undefined);
+  };
+
+  const changeOwnPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!user) {
+      return;
+    }
+    setPasswordMessage("");
+    try {
+      const updatedUser = await api.changePassword({
+        currentPassword: user.passwordConfigured ? currentPassword : undefined,
+        newPassword
+      });
+      setUser(updatedUser);
+      setCurrentPassword("");
+      setNewPassword("");
+      setPasswordMessage("Password saved.");
+    } catch (error) {
+      setPasswordMessage(error instanceof Error ? error.message : "Password could not be saved.");
+    }
   };
 
   const addToLibrary = async (book: Book) => {
@@ -539,6 +563,24 @@ export function App() {
     }
   };
 
+  const resetManagedUserPassword = async (event: FormEvent, targetUser: User) => {
+    event.preventDefault();
+    const password = resetPasswords[targetUser.id]?.trim() ?? "";
+    if (!password) {
+      setUserMessage("Enter a new password first.");
+      return;
+    }
+    setUserMessage("");
+    try {
+      await api.resetUserPassword(targetUser.id, password);
+      setResetPasswords((current) => ({ ...current, [targetUser.id]: "" }));
+      await loadAdminUsers();
+      setUserMessage(`Password updated for ${targetUser.name}.`);
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Password could not be updated.");
+    }
+  };
+
   if (!authChecked) {
     return <main className="login-shell">Loading Story Stack...</main>;
   }
@@ -623,7 +665,25 @@ export function App() {
                     <dt>Sign in</dt>
                     <dd>{user.plexId ? "Plex" : "Story Stack"}</dd>
                   </div>
+                  <div>
+                    <dt>Password</dt>
+                    <dd>{user.passwordConfigured ? "Set" : "Not set"}</dd>
+                  </div>
                 </dl>
+                <form className="account-password-form" onSubmit={changeOwnPassword}>
+                  <strong>{user.passwordConfigured ? "Change Password" : "Set Password"}</strong>
+                  {user.passwordConfigured && (
+                    <input
+                      value={currentPassword}
+                      onChange={(event) => setCurrentPassword(event.target.value)}
+                      placeholder="Current password"
+                      type="password"
+                    />
+                  )}
+                  <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="New password" type="password" />
+                  <button className="command-button">Save Password</button>
+                  {passwordMessage && <span>{passwordMessage}</span>}
+                </form>
                 <button className="command-button account-signout" onClick={() => void logout()}>
                   Sign Out
                 </button>
@@ -820,8 +880,19 @@ export function App() {
                     <UserRound size={20} />
                     <div>
                       <strong>{item.name}</strong>
-                      <span>{item.email ?? item.username ?? "Plex account"}</span>
+                      <span>
+                        {item.email ?? item.username ?? "Plex account"} - Password {item.passwordConfigured ? "set" : "not set"}
+                      </span>
                     </div>
+                    <form className="password-reset-form" onSubmit={(event) => void resetManagedUserPassword(event, item)}>
+                      <input
+                        value={resetPasswords[item.id] ?? ""}
+                        onChange={(event) => setResetPasswords((current) => ({ ...current, [item.id]: event.target.value }))}
+                        placeholder="New password"
+                        type="password"
+                      />
+                      <button className="command-button">{item.passwordConfigured ? "Reset" : "Set"}</button>
+                    </form>
                     <select
                       className="role-select"
                       value={item.role}

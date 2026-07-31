@@ -42,6 +42,13 @@ const acceptInviteSchema = z.object({
   name: z.string().trim().min(1).max(80),
   password: z.string().min(8)
 });
+const passwordChangeSchema = z.object({
+  currentPassword: z.string().optional(),
+  newPassword: z.string().min(8)
+});
+const adminPasswordResetSchema = z.object({
+  newPassword: z.string().min(8)
+});
 const userPatchSchema = z.object({
   role: z.enum(["admin", "user"]).optional(),
   status: z.enum(["active", "disabled"]).optional()
@@ -141,6 +148,20 @@ export class AppServer {
         return response.status(401).json({ error: "Login required." });
       }
       response.json(user);
+    });
+
+    this.app.post("/api/me/password", (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const parsed = passwordChangeSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return response.status(400).json({ error: "A password of at least 8 characters is required." });
+      }
+      try {
+        response.json({ user: this.context.authService.changePassword(user.id, parsed.data.currentPassword, parsed.data.newPassword) });
+      } catch (error) {
+        response.status(401).json({ error: error instanceof Error ? error.message : "Password could not be changed." });
+      }
     });
 
     this.app.get("/api/store", (request, response) => {
@@ -283,6 +304,15 @@ export class AppServer {
         user = this.context.database.updateUserStatus(request.params.userId, parsed.data.status);
       }
       response.json({ user });
+    });
+
+    this.app.post("/api/admin/users/:userId/password", (request, response) => {
+      if (!this.requireAdmin(request, response)) return;
+      const parsed = adminPasswordResetSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return response.status(400).json({ error: "A password of at least 8 characters is required." });
+      }
+      response.json({ user: this.context.authService.resetPassword(request.params.userId, parsed.data.newPassword) });
     });
 
     this.app.delete("/api/admin/users/:userId", (request, response) => {

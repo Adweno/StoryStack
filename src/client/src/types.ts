@@ -45,6 +45,7 @@ export interface User {
   email?: string;
   plexId?: string;
   lastLoginAt?: string;
+  passwordConfigured?: boolean;
 }
 
 export interface UserInvite {

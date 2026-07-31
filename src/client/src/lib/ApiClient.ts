@@ -36,6 +36,11 @@ export class ApiClient {
     return this.get<User>("/api/me");
   }
 
+  async changePassword(input: { currentPassword?: string; newPassword: string }): Promise<User> {
+    const data = await this.post<{ user: User }>("/api/me/password", input);
+    return data.user;
+  }
+
   async store(query = ""): Promise<Book[]> {
     const data = await this.get<{ books: Book[] }>(`/api/store?q=${encodeURIComponent(query)}`);
     return data.books;
@@ -135,6 +140,11 @@ export class ApiClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch)
     });
+    return data.user;
+  }
+
+  async resetUserPassword(userId: string, newPassword: string): Promise<User> {
+    const data = await this.post<{ user: User }>(`/api/admin/users/${encodeURIComponent(userId)}/password`, { newPassword });
     return data.user;
   }
 

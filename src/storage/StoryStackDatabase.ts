@@ -32,9 +32,9 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   listUsers(): User[] {
-    return this.database
-      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt FROM users ORDER BY name")
-      .all() as unknown as User[];
+    return (this.database
+      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash FROM users ORDER BY name")
+      .all() as unknown as UserRow[]).map((row) => this.toUser(row));
   }
 
   createManagedUser(input: { name: string; email: string; role: UserRole }): User {
@@ -148,25 +148,41 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   getDefaultUser(): User {
-    const user = this.database
-      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt FROM users ORDER BY role LIMIT 1")
-      .get() as User | undefined;
-    if (!user) {
+    const row = this.database
+      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash FROM users ORDER BY role LIMIT 1")
+      .get() as UserRow | undefined;
+    if (!row) {
       throw new Error("Default user was not created.");
     }
-    return user;
+    return this.toUser(row);
   }
 
   getUserById(userId: string): User | undefined {
-    return this.database
-      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt FROM users WHERE id = ?")
-      .get(userId) as User | undefined;
+    const row = this.database
+      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash FROM users WHERE id = ?")
+      .get(userId) as UserRow | undefined;
+    return row ? this.toUser(row) : undefined;
   }
 
   getUserCredentials(username: string): UserCredentials | undefined {
     return this.database
       .prepare("SELECT id, name, role, status, username, email, passwordHash FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)")
       .get(username, username) as UserCredentials | undefined;
+  }
+
+  getUserPasswordHash(userId: string): string | undefined {
+    const row = this.database.prepare("SELECT passwordHash FROM users WHERE id = ?").get(userId) as { passwordHash: string | null } | undefined;
+    return row?.passwordHash ?? undefined;
+  }
+
+  setUserPassword(userId: string, password: string): User {
+    const hasher = new PasswordHasher();
+    this.database.prepare("UPDATE users SET passwordHash = ? WHERE id = ?").run(hasher.hash(password), userId);
+    const user = this.getUserById(userId);
+    if (!user) {
+      throw new Error("User was not found.");
+    }
+    return user;
   }
 
   recordLastLogin(userId: string, now = new Date().toISOString()): void {
@@ -180,18 +196,18 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   getSessionUser(token: string, now = new Date().toISOString()): User | undefined {
-    const user = this.database
+    const row = this.database
       .prepare(
-        `SELECT u.id, u.name, u.role, u.status, u.username, u.email, u.plexId, u.lastLoginAt
+        `SELECT u.id, u.name, u.role, u.status, u.username, u.email, u.plexId, u.lastLoginAt, u.passwordHash
          FROM user_sessions s
          JOIN users u ON u.id = s.userId
          WHERE s.token = ? AND s.expiresAt > ? AND COALESCE(u.status, 'active') = 'active'`
       )
-      .get(token, now) as User | undefined;
-    if (!user) {
+      .get(token, now) as UserRow | undefined;
+    if (!row) {
       this.database.prepare("DELETE FROM user_sessions WHERE token = ?").run(token);
     }
-    return user;
+    return row ? this.toUser(row) : undefined;
   }
 
   upsertPlexUser(input: { plexId: string; email: string; name: string; role: "admin" | "user"; plexToken: string }): User {
@@ -715,6 +731,20 @@ export class StoryStackDatabase implements LibraryRepository {
     };
   }
 
+  private toUser(row: UserRow): User {
+    return {
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      status: row.status,
+      username: row.username ?? undefined,
+      email: row.email ?? undefined,
+      plexId: row.plexId ?? undefined,
+      lastLoginAt: row.lastLoginAt ?? undefined,
+      passwordConfigured: Boolean(row.passwordHash)
+    };
+  }
+
   private evaluateRemoteAccess(input: { mode: RemoteAccessSettings["mode"]; publicUrl: string }): RemoteAccessSettings {
     const publicUrl = input.publicUrl.trim().replace(/\/$/, "");
     const checkedAt = this.getSetting("remote.checkedAt");
@@ -782,6 +812,18 @@ interface UserInviteRow {
   expiresAt: string | null;
   acceptedAt: string | null;
   acceptedByUserId: string | null;
+}
+
+interface UserRow {
+  id: string;
+  name: string;
+  role: UserRole;
+  status: UserStatus;
+  username: string | null;
+  email: string | null;
+  plexId: string | null;
+  lastLoginAt: string | null;
+  passwordHash: string | null;
 }
 
 export interface BookUpsertResult {
