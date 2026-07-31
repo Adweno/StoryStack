@@ -1367,9 +1367,128 @@ h1 {
   font-size: 22px;
 }
 
+.book-review-section {
+  border-top: 1px solid #40372f;
+  padding-top: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.book-review-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.book-review-heading h3 {
+  margin: 0;
+  color: #fff7df;
+  font-size: 22px;
+}
+
+.book-review-heading span,
+.review-empty {
+  color: #b6aa96;
+}
+
+.review-form {
+  border: 1px solid #40372f;
+  background: #24211d;
+  border-radius: 8px;
+  padding: 13px;
+  display: grid;
+  gap: 10px;
+}
+
+.review-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #4d4338;
+  border-radius: 7px;
+  background: #181714;
+  color: #f3f0e8;
+  padding: 10px 11px;
+}
+
+.review-form > span {
+  color: #d8cdbc;
+}
+
+.star-rating-input,
+.star-rating-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #776b58;
+}
+
+.star-rating-input button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 25px;
+  line-height: 1;
+  padding: 0 1px;
+}
+
+.star-rating-input button.active,
+.star-rating-input button:hover,
+.star-rating-display span.active {
+  color: #f6c36a;
+}
+
+.star-rating-display {
+  font-size: 18px;
+}
+
+.review-list {
+  display: grid;
+  gap: 9px;
+}
+
+.review-card {
+  border: 1px solid #3d342e;
+  background: #181411;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.review-card > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-card strong {
+  color: #fff7df;
+}
+
+.review-card span,
+.review-card p {
+  color: #c9bead;
+}
+
+.review-card p {
+  line-height: 1.45;
+}
+
 .store-space .book-detail-meta div {
   background: #231c24;
   border-color: #604154;
+}
+
+.store-space .book-review-section,
+.store-space .review-form,
+.store-space .review-card {
+  border-color: #604154;
+}
+
+.store-space .review-form {
+  background: #231c24;
 }
 
 .admin-panel,

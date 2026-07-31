@@ -20,6 +20,18 @@ export interface Book {
   inLibrary?: boolean;
 }
 
+export interface BookReview {
+  id: string;
+  bookId: string;
+  userId: string;
+  userName: string;
+  rating: number;
+  review: string;
+  createdAt: string;
+  updatedAt: string;
+  isMine?: boolean;
+}
+
 export interface Shelf {
   id: string;
   userId: string;

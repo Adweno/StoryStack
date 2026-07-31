@@ -51,6 +51,18 @@ export interface Book {
   hidden: boolean;
 }
 
+export interface BookReview {
+  id: string;
+  bookId: string;
+  userId: string;
+  userName: string;
+  rating: number;
+  review: string;
+  createdAt: string;
+  updatedAt: string;
+  isMine?: boolean;
+}
+
 export interface UserLibraryBook {
   userId: string;
   bookId: string;

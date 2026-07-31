@@ -1,5 +1,6 @@
 import type {
   Book,
+  BookReview,
   CatalogSettings,
   MetadataEnrichmentResult,
   PlaybackProgress,
@@ -48,6 +49,14 @@ export class ApiClient {
 
   async library(): Promise<{ books: Book[]; progress: PlaybackProgress[] }> {
     return this.get("/api/library");
+  }
+
+  async bookReviews(bookId: string): Promise<BookReviewResponse> {
+    return this.get(`/api/books/${encodeURIComponent(bookId)}/reviews`);
+  }
+
+  async saveBookReview(bookId: string, input: { rating: number; review: string }): Promise<{ review: BookReview; summary: BookReviewSummary }> {
+    return this.post(`/api/books/${encodeURIComponent(bookId)}/reviews`, input);
   }
 
   async shelves(): Promise<Shelf[]> {
@@ -224,4 +233,15 @@ export interface PlexPin {
   id: number;
   code: string;
   authUrl: string;
+}
+
+export interface BookReviewSummary {
+  averageRating: number;
+  reviewCount: number;
+}
+
+export interface BookReviewResponse {
+  summary: BookReviewSummary;
+  reviews: BookReview[];
+  myReview?: BookReview;
 }

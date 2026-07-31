@@ -17,7 +17,7 @@ import {
   UserRound,
   Users
 } from "lucide-react";
-import { ApiClient, type PlexPin } from "./lib/ApiClient";
+import { ApiClient, type BookReviewResponse, type PlexPin } from "./lib/ApiClient";
 import { BookCard } from "./components/BookCard";
 import { BookCover } from "./components/BookCover";
 import { PlayerBar, type PlaybackRequest } from "./components/PlayerBar";
@@ -36,7 +36,8 @@ import type {
   Shelf,
   SyncResult,
   User,
-  UserInvite
+  UserInvite,
+  BookReview
 } from "./types";
 
 type View = "home" | "library" | "series" | "authors" | "genres" | "shelves" | "downloads" | "admin";
@@ -73,6 +74,8 @@ export function App() {
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book>();
   const [selectedBookSpace, setSelectedBookSpace] = useState<Space>("library");
+  const [selectedBookReviews, setSelectedBookReviews] = useState<BookReviewResponse>();
+  const [reviewMessage, setReviewMessage] = useState("");
   const [playback, setPlayback] = useState<PlaybackRequest>();
   const [query, setQuery] = useState("");
   const [storeBrowseMode, setStoreBrowseMode] = useState<BookBrowseMode>("title");
@@ -318,6 +321,31 @@ export function App() {
   const selectBook = (book: Book, source: Space) => {
     setSelectedBook(book);
     setSelectedBookSpace(source);
+    setSelectedBookReviews(undefined);
+    setReviewMessage("");
+    void loadBookReviews(book.id);
+  };
+
+  const loadBookReviews = async (bookId: string) => {
+    try {
+      setSelectedBookReviews(await api.bookReviews(bookId));
+    } catch {
+      setSelectedBookReviews({
+        summary: { averageRating: 0, reviewCount: 0 },
+        reviews: []
+      });
+    }
+  };
+
+  const saveBookReview = async (book: Book, rating: number, review: string) => {
+    setReviewMessage("");
+    try {
+      await api.saveBookReview(book.id, { rating, review });
+      await loadBookReviews(book.id);
+      setReviewMessage("Review saved.");
+    } catch (error) {
+      setReviewMessage(error instanceof Error ? error.message : "Review could not be saved.");
+    }
   };
 
   const startPlayback = (book: Book, mode: PlaybackRequest["mode"]) => {
@@ -800,6 +828,9 @@ export function App() {
             onBack={() => setSelectedBook(undefined)}
             onPlay={() => startPlayback(selectedBook, selectedBookSpace === "store" ? "sample" : "play")}
             onRemove={() => void removeFromLibrary(selectedBook)}
+            onSaveReview={(rating, review) => void saveBookReview(selectedBook, rating, review)}
+            reviewMessage={reviewMessage}
+            reviews={selectedBookReviews}
             source={selectedBookSpace}
           />
         ) : space === "store" && view === "admin" && user?.role === "admin" ? (
@@ -1158,6 +1189,9 @@ function BookDetailPage({
   onBack,
   onPlay,
   onRemove,
+  onSaveReview,
+  reviewMessage,
+  reviews,
   source
 }: {
   book: Book;
@@ -1166,8 +1200,21 @@ function BookDetailPage({
   onBack: () => void;
   onPlay: () => void;
   onRemove: () => void;
+  onSaveReview: (rating: number, review: string) => void;
+  reviewMessage: string;
+  reviews?: BookReviewResponse;
   source: Space;
 }) {
+  const [rating, setRating] = useState(reviews?.myReview?.rating ?? 5);
+  const [reviewText, setReviewText] = useState(reviews?.myReview?.review ?? "");
+
+  useEffect(() => {
+    setRating(reviews?.myReview?.rating ?? 5);
+    setReviewText(reviews?.myReview?.review ?? "");
+  }, [book.id, reviews?.myReview?.rating, reviews?.myReview?.review]);
+
+  const summary = reviews?.summary ?? { averageRating: 0, reviewCount: 0 };
+
   return (
     <section className="book-detail-page">
       <button className="detail-back-button" onClick={onBack} aria-label="Back">
@@ -1227,9 +1274,72 @@ function BookDetailPage({
             <h3>Description</h3>
             <p>{book.description ?? "No description imported yet."}</p>
           </section>
+          <section className="book-review-section">
+            <div className="book-review-heading">
+              <h3>Reviews</h3>
+              <span>
+                {summary.reviewCount > 0 ? `${summary.averageRating.toFixed(1)} / 5 from ${summary.reviewCount} review${summary.reviewCount === 1 ? "" : "s"}` : "No reviews yet"}
+              </span>
+            </div>
+            <form
+              className="review-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                onSaveReview(rating, reviewText);
+              }}
+            >
+              <StarRatingInput value={rating} onChange={setRating} />
+              <textarea value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Share what you thought about this book" rows={4} />
+              <button className="primary command-button">{reviews?.myReview ? "Update Review" : "Save Review"}</button>
+              {reviewMessage && <span>{reviewMessage}</span>}
+            </form>
+            <div className="review-list">
+              {reviews?.reviews.map((review) => (
+                <article className="review-card" key={review.id}>
+                  <div>
+                    <strong>{review.userName}</strong>
+                    <span>{review.isMine ? "Your review" : new Date(review.updatedAt).toLocaleDateString()}</span>
+                  </div>
+                  <StarRatingDisplay rating={review.rating} />
+                  {review.review && <p>{review.review}</p>}
+                </article>
+              ))}
+              {reviews && reviews.reviews.length === 0 && <p className="review-empty">Be the first to rate this book.</p>}
+            </div>
+          </section>
         </div>
       </div>
     </section>
+  );
+}
+
+function StarRatingInput({ value, onChange }: { value: number; onChange: (rating: number) => void }) {
+  return (
+    <div className="star-rating-input" aria-label="Rating">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <button
+          aria-label={`${star} star${star === 1 ? "" : "s"}`}
+          className={star <= value ? "active" : ""}
+          key={star}
+          onClick={() => onChange(star)}
+          type="button"
+        >
+          ★
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StarRatingDisplay({ rating }: { rating: number }) {
+  return (
+    <div className="star-rating-display" aria-label={`${rating} out of 5 stars`}>
+      {[1, 2, 3, 4, 5].map((star) => (
+        <span className={star <= rating ? "active" : ""} key={star}>
+          ★
+        </span>
+      ))}
+    </div>
   );
 }
 

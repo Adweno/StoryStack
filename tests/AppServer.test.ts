@@ -160,6 +160,43 @@ describe("AppServer", () => {
     expect(emptyLibraryResponse.body.books).toHaveLength(0);
   });
 
+  it("lets users rate and review a book", async () => {
+    const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
+    const context = new AppContext({ databasePath });
+    context.database.upsertBook({
+      id: "book_reviewed",
+      sourcePath: "/books/reviewed",
+      title: "Reviewed Book",
+      author: "A. Writer",
+      genres: [],
+      addedAt: new Date().toISOString(),
+      hidden: false
+    });
+    const app = new AppServer(context).app;
+    const loginResponse = await request(app).post("/api/auth/login").send({ username: "admin", password: "admin" }).expect(200);
+    const cookie = loginResponse.headers["set-cookie"];
+
+    const savedReview = await request(app)
+      .post("/api/books/book_reviewed/reviews")
+      .set("Cookie", cookie)
+      .send({ rating: 5, review: "Fantastic listen." })
+      .expect(200);
+    expect(savedReview.body.review).toMatchObject({ rating: 5, review: "Fantastic listen.", userName: "Admin", isMine: true });
+
+    const reviews = await request(app).get("/api/books/book_reviewed/reviews").set("Cookie", cookie).expect(200);
+    expect(reviews.body.summary).toMatchObject({ averageRating: 5, reviewCount: 1 });
+    expect(reviews.body.reviews).toHaveLength(1);
+
+    await request(app)
+      .post("/api/books/book_reviewed/reviews")
+      .set("Cookie", cookie)
+      .send({ rating: 4, review: "Still very good." })
+      .expect(200);
+    const updatedReviews = await request(app).get("/api/books/book_reviewed/reviews").set("Cookie", cookie).expect(200);
+    expect(updatedReviews.body.summary).toMatchObject({ averageRating: 4, reviewCount: 1 });
+    expect(updatedReviews.body.myReview).toMatchObject({ rating: 4, review: "Still very good." });
+  });
+
   it("requires login and admin role for Store settings routes", async () => {
     const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
     const context = new AppContext({ databasePath });

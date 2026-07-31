@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
   Book,
+  BookReview,
   CatalogSettings,
   PlaybackProgress,
   PlexSettings,
@@ -250,6 +251,51 @@ export class StoryStackDatabase implements LibraryRepository {
   async getBook(bookId: string): Promise<Book | undefined> {
     const row = this.database.prepare("SELECT * FROM books WHERE id = ?").get(bookId) as BookRow | undefined;
     return row ? this.toBook(row) : undefined;
+  }
+
+  upsertBookReview(input: { bookId: string; userId: string; rating: number; review: string }, now = new Date().toISOString()): BookReview {
+    const existing = this.database.prepare("SELECT id, createdAt FROM book_reviews WHERE bookId = ? AND userId = ?").get(input.bookId, input.userId) as
+      | { id: string; createdAt: string }
+      | undefined;
+    const id = existing?.id ?? `review_${randomBytes(12).toString("hex")}`;
+    const createdAt = existing?.createdAt ?? now;
+    this.database
+      .prepare(
+        `INSERT INTO book_reviews (id, bookId, userId, rating, review, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(bookId, userId) DO UPDATE SET
+          rating = excluded.rating,
+          review = excluded.review,
+          updatedAt = excluded.updatedAt`
+      )
+      .run(id, input.bookId, input.userId, input.rating, input.review.trim(), createdAt, now);
+    const savedReview = this.listBookReviews(input.bookId).find((item) => item.userId === input.userId);
+    if (!savedReview) {
+      throw new Error("Review could not be saved.");
+    }
+    return savedReview;
+  }
+
+  listBookReviews(bookId: string): BookReview[] {
+    return (this.database
+      .prepare(
+        `SELECT r.id, r.bookId, r.userId, u.name AS userName, r.rating, r.review, r.createdAt, r.updatedAt
+         FROM book_reviews r
+         JOIN users u ON u.id = r.userId
+         WHERE r.bookId = ?
+         ORDER BY r.updatedAt DESC`
+      )
+      .all(bookId) as unknown as BookReviewRow[]).map((row) => this.toBookReview(row));
+  }
+
+  getBookReviewSummary(bookId: string): BookReviewSummary {
+    const row = this.database
+      .prepare("SELECT AVG(rating) AS averageRating, COUNT(*) AS reviewCount FROM book_reviews WHERE bookId = ?")
+      .get(bookId) as { averageRating: number | null; reviewCount: number };
+    return {
+      averageRating: row.averageRating ?? 0,
+      reviewCount: row.reviewCount
+    };
   }
 
   listBooks(): Book[] {
@@ -605,6 +651,17 @@ export class StoryStackDatabase implements LibraryRepository {
         PRIMARY KEY (userId, bookId)
       );
 
+      CREATE TABLE IF NOT EXISTS book_reviews (
+        id TEXT PRIMARY KEY,
+        bookId TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+        review TEXT NOT NULL DEFAULT '',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        UNIQUE(bookId, userId)
+      );
+
       CREATE TABLE IF NOT EXISTS sync_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         finishedAt TEXT NOT NULL,
@@ -624,6 +681,8 @@ export class StoryStackDatabase implements LibraryRepository {
       CREATE INDEX IF NOT EXISTS idx_library_user ON user_library_books(userId);
       CREATE INDEX IF NOT EXISTS idx_shelves_user ON shelves(userId);
       CREATE INDEX IF NOT EXISTS idx_progress_user ON playback_progress(userId);
+      CREATE INDEX IF NOT EXISTS idx_reviews_book ON book_reviews(bookId);
+      CREATE INDEX IF NOT EXISTS idx_reviews_user ON book_reviews(userId);
       CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(userId);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expiresAt);
       CREATE INDEX IF NOT EXISTS idx_invites_token ON user_invites(token);
@@ -709,6 +768,19 @@ export class StoryStackDatabase implements LibraryRepository {
       plexFile: row.plexFile ?? undefined,
       addedAt: row.addedAt,
       hidden: Boolean(row.hidden)
+    };
+  }
+
+  private toBookReview(row: BookReviewRow): BookReview {
+    return {
+      id: row.id,
+      bookId: row.bookId,
+      userId: row.userId,
+      userName: row.userName,
+      rating: row.rating,
+      review: row.review,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
     };
   }
 
@@ -809,6 +881,22 @@ interface SyncRow {
   updated: number;
   removed: number;
   errors: string;
+}
+
+interface BookReviewRow {
+  id: string;
+  bookId: string;
+  userId: string;
+  userName: string;
+  rating: number;
+  review: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookReviewSummary {
+  averageRating: number;
+  reviewCount: number;
 }
 
 interface UserInviteRow {

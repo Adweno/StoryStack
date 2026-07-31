@@ -14,6 +14,10 @@ const loginSchema = z.object({
   password: z.string().min(1)
 });
 const addToLibrarySchema = z.object({ bookId: z.string().min(1) });
+const bookReviewSchema = z.object({
+  rating: z.number().int().min(1).max(5),
+  review: z.string().trim().max(2000).default("")
+});
 const shelfSchema = z.object({ name: z.string().trim().min(1).max(80) });
 const shelfBookSchema = z.object({ bookId: z.string().min(1) });
 const progressSchema = z.object({
@@ -181,6 +185,41 @@ export class AppServer {
         return response.status(404).json({ error: "Book was not found." });
       }
       response.json({ book });
+    });
+
+    this.app.get("/api/books/:bookId/reviews", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      const reviews = this.context.database
+        .listBookReviews(request.params.bookId)
+        .map((review) => ({ ...review, isMine: review.userId === user.id }));
+      response.json({
+        summary: this.context.database.getBookReviewSummary(request.params.bookId),
+        reviews,
+        myReview: reviews.find((review) => review.userId === user.id)
+      });
+    });
+
+    this.app.post("/api/books/:bookId/reviews", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const parsed = bookReviewSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return response.status(400).json({ error: "Choose a rating from 1 to 5 stars." });
+      }
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      const review = this.context.database.upsertBookReview({ bookId: request.params.bookId, userId: user.id, ...parsed.data });
+      response.json({
+        review: { ...review, isMine: true },
+        summary: this.context.database.getBookReviewSummary(request.params.bookId)
+      });
     });
 
     this.app.get("/api/library", (request, response) => {
