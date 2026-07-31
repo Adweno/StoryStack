@@ -271,7 +271,7 @@ export function App() {
     setPasswordMessage("");
     try {
       const updatedUser = await api.changePassword({
-        currentPassword: user.passwordConfigured ? currentPassword : undefined,
+        currentPassword: user.passwordConfigured && !user.passwordResetRequired ? currentPassword : undefined,
         newPassword
       });
       setUser(updatedUser);
@@ -589,6 +589,31 @@ export function App() {
     return <LoginScreen api={api} message={loginMessage} onMessage={setLoginMessage} onSignedIn={refresh} />;
   }
 
+  if (user.passwordResetRequired) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <div className="login-brand">
+            <img className="login-logo" src={storyStackLogo} alt="" />
+            <span>Story Stack</span>
+          </div>
+          <form className="login-form" onSubmit={changeOwnPassword}>
+            <p>Choose a private password before continuing. This replaces the temporary password set by an admin.</p>
+            <label>
+              New Password
+              <input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 8 characters" type="password" autoFocus />
+            </label>
+            {passwordMessage && <p className="login-message">{passwordMessage}</p>}
+            <button className="primary command-button">Save New Password</button>
+          </form>
+          <button className="command-button" onClick={() => void logout()}>
+            Sign Out
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className={space === "store" ? "app-shell store-space" : "app-shell"}>
       <header className="app-topbar">
@@ -667,12 +692,12 @@ export function App() {
                   </div>
                   <div>
                     <dt>Password</dt>
-                    <dd>{user.passwordConfigured ? "Set" : "Not set"}</dd>
+                    <dd>{user.passwordResetRequired ? "Change required" : user.passwordConfigured ? "Set" : "Not set"}</dd>
                   </div>
                 </dl>
                 <form className="account-password-form" onSubmit={changeOwnPassword}>
-                  <strong>{user.passwordConfigured ? "Change Password" : "Set Password"}</strong>
-                  {user.passwordConfigured && (
+                  <strong>{user.passwordResetRequired ? "Choose New Password" : user.passwordConfigured ? "Change Password" : "Set Password"}</strong>
+                  {user.passwordConfigured && !user.passwordResetRequired && (
                     <input
                       value={currentPassword}
                       onChange={(event) => setCurrentPassword(event.target.value)}
@@ -881,7 +906,8 @@ export function App() {
                     <div>
                       <strong>{item.name}</strong>
                       <span>
-                        {item.email ?? item.username ?? "Plex account"} - Password {item.passwordConfigured ? "set" : "not set"}
+                        {item.email ?? item.username ?? "Plex account"} - Password{" "}
+                        {item.passwordResetRequired ? "change required" : item.passwordConfigured ? "set" : "not set"}
                       </span>
                     </div>
                     <form className="password-reset-form" onSubmit={(event) => void resetManagedUserPassword(event, item)}>

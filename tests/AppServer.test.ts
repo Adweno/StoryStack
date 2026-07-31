@@ -119,8 +119,18 @@ describe("AppServer", () => {
       .send({ newPassword: "reset secure password" })
       .expect(200);
     expect(reset.body.user.passwordConfigured).toBe(true);
+    expect(reset.body.user.passwordResetRequired).toBe(true);
 
-    await request(app).post("/api/auth/login").send({ username: "reader-two@example.com", password: "reset secure password" }).expect(200);
+    const login = await request(app).post("/api/auth/login").send({ username: "reader-two@example.com", password: "reset secure password" }).expect(200);
+    expect(login.body.user.passwordResetRequired).toBe(true);
+
+    const changed = await request(app)
+      .post("/api/me/password")
+      .set("Cookie", login.headers["set-cookie"])
+      .send({ newPassword: "private secure password" })
+      .expect(200);
+    expect(changed.body.user.passwordResetRequired).toBe(false);
+    await request(app).post("/api/auth/login").send({ username: "reader-two@example.com", password: "private secure password" }).expect(200);
   });
 
   it("adds and removes a Store book from My Library through the API", async () => {

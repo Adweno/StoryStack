@@ -11,6 +11,7 @@ export interface User {
   plexId?: string;
   lastLoginAt?: string;
   passwordConfigured?: boolean;
+  passwordResetRequired?: boolean;
 }
 
 export type UserStatus = "active" | "disabled";
