@@ -842,7 +842,7 @@ export function App() {
             onPlay={() => startPlayback(selectedBook, selectedBookSpace === "store" ? "sample" : "play")}
             onRemove={() => void removeFromLibrary(selectedBook)}
             onDeleteReview={() => void deleteBookReview(selectedBook)}
-            onSaveReview={(rating, review) => void saveBookReview(selectedBook, rating, review)}
+            onSaveReview={(rating, review) => saveBookReview(selectedBook, rating, review)}
             reviewMessage={reviewMessage}
             reviews={selectedBookReviews}
             source={selectedBookSpace}
@@ -1216,18 +1216,18 @@ function BookDetailPage({
   onPlay: () => void;
   onRemove: () => void;
   onDeleteReview: () => void;
-  onSaveReview: (rating: number, review: string) => void;
+  onSaveReview: (rating: number, review: string) => Promise<void>;
   reviewMessage: string;
   reviews?: BookReviewResponse;
   source: Space;
 }) {
-  const [rating, setRating] = useState<number | undefined>(reviews?.myReview?.rating);
-  const [reviewText, setReviewText] = useState(reviews?.myReview?.review ?? "");
+  const [rating, setRating] = useState<number | undefined>();
+  const [reviewText, setReviewText] = useState("");
 
   useEffect(() => {
-    setRating(reviews?.myReview?.rating);
-    setReviewText(reviews?.myReview?.review ?? "");
-  }, [book.id, reviews?.myReview?.rating, reviews?.myReview?.review]);
+    setRating(undefined);
+    setReviewText("");
+  }, [book.id]);
 
   const summary = reviews?.summary ?? { averageRating: 0, reviewCount: 0 };
   const canManageReview = source === "library" && inLibrary;
@@ -1301,10 +1301,12 @@ function BookDetailPage({
             {canManageReview && (
               <form
                 className="review-form"
-                onSubmit={(event) => {
+                onSubmit={async (event) => {
                   event.preventDefault();
                   if (!rating) return;
-                  onSaveReview(rating, reviewText);
+                  await onSaveReview(rating, reviewText);
+                  setRating(undefined);
+                  setReviewText("");
                 }}
               >
                 <StarRatingInput value={rating} onChange={setRating} />
