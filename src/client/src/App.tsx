@@ -718,7 +718,7 @@ export function App() {
         {installPrompt && (
           <button className="install-button" onClick={() => void installApp()}>
             <Download size={18} />
-            Install App
+            <span>Install App</span>
           </button>
         )}
         <label className="search-box topbar-search">
@@ -743,13 +743,13 @@ export function App() {
               }}
             >
               {space === "store" ? <Library size={18} /> : <Store size={18} />}
-              {space === "store" ? "My Library" : "Store"}
+              <span>{space === "store" ? "My Library" : "Store"}</span>
             </button>
           )}
           {space === "store" && user?.role === "admin" && (
             <button className={view === "admin" ? "settings-button active" : "settings-button"} onClick={() => navigateToView("admin")}>
               <Settings size={18} />
-              Settings
+              <span>Settings</span>
             </button>
           )}
           <div className="account-menu" ref={accountMenuRef}>
@@ -851,13 +851,13 @@ export function App() {
           {offlineOnly ? (
             <button className="active" onClick={() => navigateToView("downloads")}>
               <Download size={18} />
-              Downloads
+              <span>Downloads</span>
             </button>
           ) : (
             <>
               <button className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>
                 <Home size={18} />
-                Home
+                <span>Home</span>
               </button>
               <button
                 className={view === "library" ? "active" : ""}
@@ -870,7 +870,7 @@ export function App() {
                 }}
               >
                 <Library size={18} />
-                {space === "store" ? "Books" : "Library"}
+                <span>{space === "store" ? "Books" : "Library"}</span>
               </button>
               <button
                 className={view === "series" ? "active" : ""}
@@ -883,7 +883,7 @@ export function App() {
                 }}
               >
                 <BookMarked size={18} />
-                Series
+                <span>Series</span>
               </button>
               <button
                 className={view === "authors" ? "active" : ""}
@@ -896,7 +896,7 @@ export function App() {
                 }}
               >
                 <Users size={18} />
-                Authors
+                <span>Authors</span>
               </button>
               <button
                 className={view === "genres" ? "active" : ""}
@@ -909,17 +909,17 @@ export function App() {
                 }}
               >
                 <Tags size={18} />
-                Genres
+                <span>Genres</span>
               </button>
               {space === "library" && (
                 <>
               <button className={view === "shelves" ? "active" : ""} onClick={() => navigateToView("shelves")}>
                 <BookMarked size={18} />
-                Shelves
+                <span>Shelves</span>
               </button>
               <button className={view === "downloads" ? "active" : ""} onClick={() => navigateToView("downloads")}>
                 <Download size={18} />
-                Downloads
+                <span>Downloads</span>
               </button>
                 </>
               )}
