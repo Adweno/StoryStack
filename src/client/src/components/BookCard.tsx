@@ -150,6 +150,15 @@ export function BookCard({
                 )}
             </div>
           )}
+          {book.reviewCount && book.reviewCount > 0 && book.averageRating !== undefined && (
+            <span
+              className="book-rating-badge"
+              title={`${book.averageRating.toFixed(1)} out of 5 from ${book.reviewCount} review${book.reviewCount === 1 ? "" : "s"}`}
+            >
+              <span aria-hidden="true">★</span>
+              {book.averageRating.toFixed(1)}
+            </span>
+          )}
         </div>
       </div>
     </article>

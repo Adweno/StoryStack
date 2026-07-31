@@ -825,8 +825,15 @@ h1 {
 }
 
 .light-theme:not(.store-space) .star-rating-input,
-.light-theme:not(.store-space) .star-rating-display {
+.light-theme:not(.store-space) .star-rating-display,
+.light-theme:not(.store-space) .book-rating-badge {
   color: #9c9285;
+}
+
+.light-theme:not(.store-space) .book-rating-badge {
+  background: #fff3da;
+  border-color: #d5b678;
+  color: #7b5719;
 }
 
 .light-theme:not(.store-space) .settings-tabs {
@@ -1492,6 +1499,26 @@ h1 {
   gap: 6px;
   min-height: 30px;
   position: relative;
+}
+
+.book-rating-badge {
+  margin-left: auto;
+  min-height: 32px;
+  border: 1px solid #574a39;
+  border-radius: 999px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #2a251f;
+  color: #ffd38d;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.book-rating-badge span {
+  font-size: 14px;
 }
 
 .book-menu {

@@ -326,12 +326,12 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   listBooks(): Book[] {
-    return (this.database.prepare("SELECT * FROM books ORDER BY title").all() as unknown as BookRow[]).map((row) => this.toBook(row));
+    return this.withBookReviewSummaries((this.database.prepare("SELECT * FROM books ORDER BY title").all() as unknown as BookRow[]).map((row) => this.toBook(row)));
   }
 
   listVisibleBooks(): Book[] {
-    return (this.database.prepare("SELECT * FROM books WHERE hidden = 0 ORDER BY title").all() as unknown as BookRow[]).map((row) =>
-      this.toBook(row)
+    return this.withBookReviewSummaries(
+      (this.database.prepare("SELECT * FROM books WHERE hidden = 0 ORDER BY title").all() as unknown as BookRow[]).map((row) => this.toBook(row))
     );
   }
 
@@ -494,7 +494,8 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   listLibraryBookDetails(userId: string): Book[] {
-    return (
+    return this.withBookReviewSummaries(
+      (
       this.database
         .prepare(
           `SELECT b.* FROM books b
@@ -503,7 +504,8 @@ export class StoryStackDatabase implements LibraryRepository {
            ORDER BY ulb.addedAt DESC`
         )
         .all(userId) as unknown as BookRow[]
-    ).map((row) => this.toBook(row));
+      ).map((row) => this.toBook(row))
+    );
   }
 
   async addLibraryBook(entry: UserLibraryBook): Promise<void> {
@@ -549,7 +551,8 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   listShelfBookDetails(userId: string, shelfId: string): Book[] {
-    return (
+    return this.withBookReviewSummaries(
+      (
       this.database
         .prepare(
           `SELECT b.* FROM books b
@@ -559,7 +562,8 @@ export class StoryStackDatabase implements LibraryRepository {
            ORDER BY sb.position`
         )
         .all(userId, shelfId) as unknown as BookRow[]
-    ).map((row) => this.toBook(row));
+      ).map((row) => this.toBook(row))
+    );
   }
 
   async upsertProgress(progress: PlaybackProgress): Promise<void> {
@@ -802,6 +806,32 @@ export class StoryStackDatabase implements LibraryRepository {
     };
   }
 
+  private withBookReviewSummaries(books: Book[]): Book[] {
+    if (books.length === 0) {
+      return books;
+    }
+    const summaries = this.database
+      .prepare(
+        `SELECT bookId, AVG(rating) AS averageRating, COUNT(*) AS reviewCount
+         FROM book_reviews
+         WHERE bookId IN (${books.map(() => "?").join(",")})
+         GROUP BY bookId`
+      )
+      .all(...books.map((book) => book.id)) as unknown as BookReviewSummaryRow[];
+    const summariesByBookId = new Map(summaries.map((summary) => [summary.bookId, summary]));
+    return books.map((book) => {
+      const summary = summariesByBookId.get(book.id);
+      if (!summary || summary.reviewCount === 0) {
+        return book;
+      }
+      return {
+        ...book,
+        averageRating: summary.averageRating,
+        reviewCount: summary.reviewCount
+      };
+    });
+  }
+
   private toBookReview(row: BookReviewRow): BookReview {
     return {
       id: row.id,
@@ -930,6 +960,10 @@ interface BookReviewRow {
 export interface BookReviewSummary {
   averageRating: number;
   reviewCount: number;
+}
+
+interface BookReviewSummaryRow extends BookReviewSummary {
+  bookId: string;
 }
 
 interface UserInviteRow {

@@ -214,6 +214,8 @@ describe("AppServer", () => {
     const reviews = await request(app).get("/api/books/book_reviewed/reviews").set("Cookie", cookie).expect(200);
     expect(reviews.body.summary).toMatchObject({ averageRating: 5, reviewCount: 1 });
     expect(reviews.body.reviews).toHaveLength(1);
+    const libraryWithRating = await request(app).get("/api/library").set("Cookie", cookie).expect(200);
+    expect(libraryWithRating.body.books[0]).toMatchObject({ averageRating: 5, reviewCount: 1 });
 
     await request(app)
       .post("/api/books/book_reviewed/reviews")

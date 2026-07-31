@@ -18,6 +18,8 @@ export interface Book {
   addedAt: string;
   hidden: boolean;
   inLibrary?: boolean;
+  averageRating?: number;
+  reviewCount?: number;
 }
 
 export interface BookReview {

@@ -376,6 +376,7 @@ export function App() {
     try {
       await api.saveBookReview(book.id, { rating, review });
       await loadBookReviews(book.id);
+      await refresh();
       setReviewMessage("Review saved.");
     } catch (error) {
       setReviewMessage(error instanceof Error ? error.message : "Review could not be saved.");
@@ -389,6 +390,7 @@ export function App() {
     try {
       await api.deleteMyBookReview(book.id);
       await loadBookReviews(book.id);
+      await refresh();
       setReviewMessage("Review removed.");
     } catch (error) {
       setReviewMessage(error instanceof Error ? error.message : "Review could not be removed.");

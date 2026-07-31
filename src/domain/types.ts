@@ -52,6 +52,8 @@ export interface Book {
   plexFile?: string;
   addedAt: string;
   hidden: boolean;
+  averageRating?: number;
+  reviewCount?: number;
 }
 
 export interface BookReview {
