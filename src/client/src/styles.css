@@ -1471,7 +1471,7 @@ h1 {
   gap: 8px;
 }
 
-.review-card > div {
+.review-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;

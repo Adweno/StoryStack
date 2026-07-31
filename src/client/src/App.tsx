@@ -1322,7 +1322,7 @@ function BookDetailPage({
             <div className="review-list">
               {reviews?.reviews.map((review) => (
                 <article className="review-card" key={review.id}>
-                  <div>
+                  <div className="review-card-header">
                     <strong>{review.userName}</strong>
                     <span>{review.isMine ? "Your review" : new Date(review.updatedAt).toLocaleDateString()}</span>
                   </div>
