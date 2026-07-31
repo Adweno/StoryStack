@@ -15,7 +15,8 @@ import {
   Tags,
   Trash2,
   UserRound,
-  Users
+  Users,
+  X
 } from "lucide-react";
 import { ApiClient, type BookReviewResponse, type PlexPin } from "./lib/ApiClient";
 import { BookCard } from "./components/BookCard";
@@ -63,6 +64,8 @@ export function App() {
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const userSettingsMenuRef = useRef<HTMLDivElement>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent>();
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
+  const [installActionVisible, setInstallActionVisible] = useState(true);
   const [offlineOnly, setOfflineOnly] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -154,8 +157,15 @@ export function App() {
     const beforeInstallPrompt = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as BeforeInstallPromptEvent);
+      setInstallActionVisible(true);
     };
-    const appInstalled = () => setInstallPrompt(undefined);
+    const appInstalled = () => {
+      setInstallPrompt(undefined);
+      setInstallHelpOpen(false);
+      setInstallActionVisible(false);
+    };
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone);
+    setInstallActionVisible(!standalone);
     window.addEventListener("beforeinstallprompt", beforeInstallPrompt);
     window.addEventListener("appinstalled", appInstalled);
     return () => {
@@ -279,6 +289,7 @@ export function App() {
 
   const installApp = async () => {
     if (!installPrompt) {
+      setInstallHelpOpen(true);
       return;
     }
     await installPrompt.prompt();
@@ -715,7 +726,7 @@ export function App() {
           <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
-        {installPrompt && (
+        {installActionVisible && (
           <button className="install-button" onClick={() => void installApp()}>
             <Download size={18} />
             <span>Install App</span>
@@ -846,6 +857,16 @@ export function App() {
           )}
         </div>
       </header>
+      {installHelpOpen && (
+        <section className="install-help-panel" aria-label="Install Story Stack">
+          <button className="detail-back-button install-help-close" onClick={() => setInstallHelpOpen(false)} title="Close install help">
+            <X size={18} />
+          </button>
+          <strong>Install Story Stack</strong>
+          <p>On iPhone or iPad, tap Share in Safari, then choose Add to Home Screen.</p>
+          <p>On Android, open the browser menu and choose Install app or Add to Home screen.</p>
+        </section>
+      )}
       <aside className="sidebar">
         <nav>
           {offlineOnly ? (

@@ -555,6 +555,38 @@ h1 {
   color: #fff7df;
 }
 
+.install-help-panel {
+  position: fixed;
+  top: 96px;
+  right: 18px;
+  width: min(360px, calc(100vw - 28px));
+  border: 1px solid #4a4035;
+  border-radius: 10px;
+  background: #24211d;
+  color: #fff7df;
+  padding: 18px;
+  z-index: 130;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 44%);
+}
+
+.install-help-panel strong {
+  display: block;
+  font-size: 22px;
+  margin-bottom: 10px;
+}
+
+.install-help-panel p {
+  color: #d8cdbc;
+  line-height: 1.42;
+  margin-top: 8px;
+}
+
+.install-help-close {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+}
+
 .store-button.active,
 .store-button:hover {
   background: #8c4d57;
@@ -790,6 +822,17 @@ h1 {
 .light-theme:not(.store-space) .settings-button.active {
   background: #d8e8dd;
   border-color: #799f8c;
+}
+
+.light-theme:not(.store-space) .install-help-panel {
+  background: #fffaf2;
+  border-color: #d8c9b6;
+  color: #241f19;
+  box-shadow: 0 24px 70px rgb(94 71 43 / 22%);
+}
+
+.light-theme:not(.store-space) .install-help-panel p {
+  color: #6b5f50;
 }
 
 .light-theme:not(.store-space) .icon-button,
@@ -2464,7 +2507,7 @@ h1 {
 
 .now-playing-panel {
   position: fixed;
-  inset: auto clamp(18px, 5vw, 80px) 98px clamp(18px, 5vw, 80px);
+  inset: auto clamp(18px, 5vw, 80px) 18px clamp(18px, 5vw, 80px);
   border: 1px solid #4a4035;
   background:
     linear-gradient(135deg, rgb(127 74 85 / 34%), transparent 58%),
@@ -2858,11 +2901,18 @@ audio {
   }
 
   .now-playing-panel {
-    inset: 10px 10px 142px;
+    inset: 10px 10px 74px;
     padding: 16px;
     grid-template-columns: 1fr;
     align-content: start;
     overflow: auto;
+  }
+
+  .install-help-panel {
+    left: 12px;
+    right: 12px;
+    top: 104px;
+    width: auto;
   }
 
   .now-playing-art {

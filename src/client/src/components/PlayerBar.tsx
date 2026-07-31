@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Gauge, Pause, Play, RotateCcw, RotateCw, X } from "lucide-react";
+import { ChevronUp, Gauge, Pause, Play, RotateCcw, RotateCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Book } from "../types";
 import { ApiClient } from "../lib/ApiClient";
@@ -191,30 +191,33 @@ export function PlayerBar({ playback, api }: { playback?: PlaybackRequest; api: 
           </div>
         </section>
       )}
-      <div className="player-bar">
-        <button className="player-cover-button" onClick={() => setExpanded(true)} aria-label="Open now playing">
-          <BookCover book={book} />
-        </button>
-        <button className="icon-button" onClick={() => skipBy(-15)} title="Back 15 seconds">
-          <RotateCcw size={16} />
-        </button>
-        <button className="icon-button primary" onClick={togglePlayback} title={playing ? "Pause" : "Play"}>
-          {playing ? <Pause size={18} /> : <Play size={18} />}
-        </button>
-        <button className="icon-button" onClick={() => skipBy(15)} title="Forward 15 seconds">
-          <RotateCw size={16} />
-        </button>
-        <button className="now-playing" onClick={() => setExpanded(true)} aria-label="Open now playing">
-          <strong>{book.title}</strong>
-          <span>{playback.mode === "sample" ? "Sample" : book.author}</span>
-        </button>
-        {renderProgressControl()}
-        <button className="command-button player-speed-button" onClick={cyclePlaybackRate} title="Playback speed">
-          {playbackRate}x
-        </button>
-        <button className="icon-button player-expand-button" onClick={() => setExpanded((open) => !open)} title={expanded ? "Collapse now playing" : "Open now playing"}>
-          {expanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-        </button>
+      {!expanded && (
+        <div className="player-bar">
+          <button className="player-cover-button" onClick={() => setExpanded(true)} aria-label="Open now playing">
+            <BookCover book={book} />
+          </button>
+          <button className="icon-button" onClick={() => skipBy(-15)} title="Back 15 seconds">
+            <RotateCcw size={16} />
+          </button>
+          <button className="icon-button primary" onClick={togglePlayback} title={playing ? "Pause" : "Play"}>
+            {playing ? <Pause size={18} /> : <Play size={18} />}
+          </button>
+          <button className="icon-button" onClick={() => skipBy(15)} title="Forward 15 seconds">
+            <RotateCw size={16} />
+          </button>
+          <button className="now-playing" onClick={() => setExpanded(true)} aria-label="Open now playing">
+            <strong>{book.title}</strong>
+            <span>{playback.mode === "sample" ? "Sample" : book.author}</span>
+          </button>
+          {renderProgressControl()}
+          <button className="command-button player-speed-button" onClick={cyclePlaybackRate} title="Playback speed">
+            {playbackRate}x
+          </button>
+          <button className="icon-button player-expand-button" onClick={() => setExpanded(true)} title="Open now playing">
+            <ChevronUp size={18} />
+          </button>
+        </div>
+      )}
       <audio
         ref={audioRef}
         src={audioSource}
@@ -241,7 +244,6 @@ export function PlayerBar({ playback, api }: { playback?: PlaybackRequest; api: 
           }
         }}
       />
-      </div>
     </>
   );
 }
