@@ -1,0 +1,2127 @@
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  BookMarked,
+  Download,
+  Home,
+  Library,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings,
+  Sparkles,
+  Store,
+  Tags,
+  Trash2,
+  UserRound,
+  Users
+} from "lucide-react";
+import { ApiClient, type PlexPin } from "./lib/ApiClient";
+import { BookCard } from "./components/BookCard";
+import { BookCover } from "./components/BookCover";
+import { PlayerBar, type PlaybackRequest } from "./components/PlayerBar";
+import { BookBrowser, type BookBrowseMode } from "./lib/BookBrowser";
+import { LibraryAddPlanner } from "./lib/LibraryAddPlanner";
+import { LibraryRemovePlanner } from "./lib/LibraryRemovePlanner";
+import { OfflineBookCache } from "./lib/OfflineBookCache";
+import type {
+  Book,
+  MetadataEnrichmentResult,
+  PlexLibrarySection,
+  PlexMatchResult,
+  PlexSettings,
+  RemoteAccessSettings,
+  Shelf,
+  SyncResult,
+  User,
+  UserInvite
+} from "./types";
+
+type View = "home" | "library" | "series" | "authors" | "genres" | "shelves" | "downloads" | "admin";
+type Space = "library" | "store";
+type OfflineState = "idle" | "saving" | "saved";
+type SettingsTab = "access" | "catalog";
+
+export function App() {
+  const api = useMemo(() => new ApiClient(), []);
+  const offlineCache = useMemo(() => new OfflineBookCache(), []);
+  const [space, setSpace] = useState<Space>("library");
+  const [view, setView] = useState<View>("home");
+  const [user, setUser] = useState<User>();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const [loginMessage, setLoginMessage] = useState("");
+  const [storeBooks, setStoreBooks] = useState<Book[]>([]);
+  const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
+  const [offlineBookIds, setOfflineBookIds] = useState<Set<string>>(new Set());
+  const [savingOfflineBookIds, setSavingOfflineBookIds] = useState<Set<string>>(new Set());
+  const [shelves, setShelves] = useState<Shelf[]>([]);
+  const [selectedBook, setSelectedBook] = useState<Book>();
+  const [selectedBookSpace, setSelectedBookSpace] = useState<Space>("library");
+  const [playback, setPlayback] = useState<PlaybackRequest>();
+  const [query, setQuery] = useState("");
+  const [storeBrowseMode, setStoreBrowseMode] = useState<BookBrowseMode>("title");
+  const [libraryBrowseMode, setLibraryBrowseMode] = useState<BookBrowseMode>("title");
+  const [storeCategoryKey, setStoreCategoryKey] = useState<string>();
+  const [libraryCategoryKey, setLibraryCategoryKey] = useState<string>();
+  const [selectedShelf, setSelectedShelf] = useState<Shelf>();
+  const [selectedShelfBooks, setSelectedShelfBooks] = useState<Book[]>([]);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("access");
+  const [adminUsers, setAdminUsers] = useState<User[]>([]);
+  const [adminInvites, setAdminInvites] = useState<UserInvite[]>([]);
+  const [remoteSettings, setRemoteSettings] = useState<RemoteAccessSettings>();
+  const [remoteMode, setRemoteMode] = useState<RemoteAccessSettings["mode"]>("local");
+  const [remotePublicUrl, setRemotePublicUrl] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"admin" | "user">("user");
+  const [inviteDays, setInviteDays] = useState("14");
+  const [inviteLink, setInviteLink] = useState("");
+  const [metadataResult, setMetadataResult] = useState<MetadataEnrichmentResult>();
+  const [metadataMessage, setMetadataMessage] = useState("");
+  const [catalogPath, setCatalogPath] = useState("");
+  const [catalogResult, setCatalogResult] = useState<SyncResult>();
+  const [catalogMessage, setCatalogMessage] = useState("");
+  const [plexSettings, setPlexSettings] = useState<PlexSettings>({ serverUrl: "", sectionKey: "" });
+  const [plexSections, setPlexSections] = useState<PlexLibrarySection[]>([]);
+  const [plexResult, setPlexResult] = useState<PlexMatchResult>();
+  const [plexMessage, setPlexMessage] = useState("");
+  const [shelfName, setShelfName] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState<"admin" | "user">("user");
+  const [userMessage, setUserMessage] = useState("");
+
+  const libraryIds = useMemo(() => new Set(libraryBooks.map((book) => book.id)), [libraryBooks]);
+  const downloadedBooks = useMemo(
+    () => libraryBooks.filter((book) => offlineBookIds.has(book.id) && matchesBookQuery(book, query)),
+    [libraryBooks, offlineBookIds, query]
+  );
+  const effectiveLibraryBrowseMode = browseModeForView(view, libraryBrowseMode);
+  const effectiveStoreBrowseMode = browseModeForView(view, storeBrowseMode);
+  const title = selectedShelf && space === "library" && view === "shelves" ? selectedShelf.name : viewTitle(space, view);
+  const subtitle =
+    selectedShelf && space === "library" && view === "shelves"
+      ? `${selectedShelfBooks.length} books`
+      : viewSubtitle(space, view, storeBooks.length, libraryBooks.length);
+
+  useEffect(() => {
+    void refresh().finally(() => setAuthChecked(true));
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void api.store(query).then(setStoreBooks).catch(() => setUser(undefined));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [api, query, user]);
+
+  useEffect(() => {
+    if (!accountOpen) {
+      return;
+    }
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setAccountOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", closeOnOutsideClick);
+    return () => window.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [accountOpen]);
+
+  useEffect(() => {
+    if (space !== "store" || view !== "admin" || user?.role !== "admin") {
+      return;
+    }
+    void loadAdminUsers();
+    void loadInvites();
+    void loadRemoteAccessSettings();
+    void loadCatalogSettings();
+    void loadPlexSettings();
+  }, [api, space, user?.role, view]);
+
+  useEffect(() => {
+    if (!user || libraryBooks.length === 0) {
+      setOfflineBookIds(new Set());
+      return;
+    }
+    let active = true;
+    void Promise.all(libraryBooks.map(async (book) => [book.id, await offlineCache.has(book.id)] as const)).then((states) => {
+      if (!active) {
+        return;
+      }
+      setOfflineBookIds(new Set(states.filter(([, cached]) => cached).map(([bookId]) => bookId)));
+    });
+    return () => {
+      active = false;
+    };
+  }, [libraryBooks, offlineCache, user]);
+
+  const refresh = async () => {
+    try {
+      const [me, store, library, shelfList] = await Promise.all([api.me(), api.store(query), api.library(), api.shelves()]);
+      setUser(me);
+      setStoreBooks(store);
+      setLibraryBooks(library.books);
+      setShelves(shelfList);
+      if (selectedShelf) {
+        const shelfBooks = await api.shelfBooks(selectedShelf.id);
+        setSelectedShelfBooks(shelfBooks);
+      }
+    } catch (error) {
+      setUser(undefined);
+      setStoreBooks([]);
+      setLibraryBooks([]);
+      setShelves([]);
+      setSelectedShelf(undefined);
+      setSelectedShelfBooks([]);
+      throw error;
+    }
+  };
+
+  const logout = async () => {
+    await api.logout();
+    setAccountOpen(false);
+    setUser(undefined);
+    setStoreBooks([]);
+    setLibraryBooks([]);
+    setShelves([]);
+    setSelectedShelf(undefined);
+    setSelectedShelfBooks([]);
+    setSelectedBook(undefined);
+    setPlayback(undefined);
+  };
+
+  const addToLibrary = async (book: Book) => {
+    await api.addToLibrary(book.id);
+    await refresh();
+  };
+
+  const addBooksToLibrary = async (books: Book[]) => {
+    const missingBooks = new LibraryAddPlanner(libraryIds).missingBooks(books);
+    await Promise.all(missingBooks.map((book) => api.addToLibrary(book.id)));
+    await refresh();
+  };
+
+  const removeFromLibrary = async (book: Book) => {
+    await api.removeFromLibrary(book.id);
+    await refresh();
+  };
+
+  const removeBooksFromLibrary = async (books: Book[]) => {
+    const removableBooks = new LibraryRemovePlanner().removableBooks(books);
+    await Promise.all(removableBooks.map((book) => api.removeFromLibrary(book.id)));
+    await refresh();
+  };
+
+  const moveToShelf = async (book: Book, shelf: Shelf) => {
+    await api.addBookToShelf(shelf.id, book.id);
+    await refresh();
+  };
+
+  const openShelf = async (shelf: Shelf) => {
+    setSelectedShelf(shelf);
+    setSelectedShelfBooks(await api.shelfBooks(shelf.id));
+  };
+
+  const selectBook = (book: Book, source: Space) => {
+    setSelectedBook(book);
+    setSelectedBookSpace(source);
+  };
+
+  const startPlayback = (book: Book, mode: PlaybackRequest["mode"]) => {
+    setPlayback({ book, mode, requestId: Date.now() });
+  };
+
+  const saveOffline = async (book: Book) => {
+    setSavingOfflineBookIds((current) => new Set(current).add(book.id));
+    try {
+      await offlineCache.save(book);
+      setOfflineBookIds((current) => new Set(current).add(book.id));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Book could not be saved offline.");
+    } finally {
+      setSavingOfflineBookIds((current) => {
+        const next = new Set(current);
+        next.delete(book.id);
+        return next;
+      });
+    }
+  };
+
+  const removeOffline = async (book: Book) => {
+    await offlineCache.remove(book);
+    setOfflineBookIds((current) => {
+      const next = new Set(current);
+      next.delete(book.id);
+      return next;
+    });
+  };
+
+  const offlineStateFor = (book: Book): OfflineState => {
+    if (savingOfflineBookIds.has(book.id)) {
+      return "saving";
+    }
+    return offlineBookIds.has(book.id) ? "saved" : "idle";
+  };
+
+  const createShelf = async (event: FormEvent) => {
+    event.preventDefault();
+    await api.createShelf(shelfName);
+    setShelfName("");
+    await refresh();
+  };
+
+  const runMetadataEnrichment = async () => {
+    setMetadataMessage("Looking for missing metadata...");
+    setMetadataResult(undefined);
+    try {
+      const result = await api.enrichMetadata();
+      setMetadataResult(result);
+      setMetadataMessage("");
+      await refresh();
+    } catch (error) {
+      setMetadataMessage(error instanceof Error ? error.message : "Metadata lookup failed.");
+    }
+  };
+
+  const loadCatalogSettings = async () => {
+    const catalog = await api.catalogSettings();
+    setCatalogPath(catalog.settings.libraryPath);
+    setCatalogResult(catalog.latestSync);
+  };
+
+  const saveCatalogSettings = async (event: FormEvent) => {
+    event.preventDefault();
+    setCatalogMessage("");
+    try {
+      const settings = await api.saveCatalogSettings({ libraryPath: catalogPath });
+      setCatalogPath(settings.libraryPath);
+      setCatalogMessage("Audiobook folder saved.");
+    } catch (error) {
+      setCatalogMessage(error instanceof Error ? error.message : "Audiobook folder could not be saved.");
+    }
+  };
+
+  const syncCatalog = async () => {
+    setCatalogMessage("Scanning audiobook folder...");
+    setCatalogResult(undefined);
+    try {
+      const result = await api.syncCatalog(catalogPath);
+      setCatalogResult(result);
+      setCatalogMessage("");
+      await refresh();
+    } catch (error) {
+      setCatalogMessage(error instanceof Error ? error.message : "Audiobook folder could not be scanned.");
+    }
+  };
+
+  const loadPlexSettings = async () => {
+    setPlexSettings(await api.plexSettings());
+  };
+
+  const savePlexSettings = async (event: FormEvent) => {
+    event.preventDefault();
+    setPlexMessage("");
+    try {
+      setPlexSettings(await api.savePlexSettings(plexSettings));
+      setPlexMessage("Plex server saved.");
+    } catch (error) {
+      setPlexMessage(error instanceof Error ? error.message : "Plex settings could not be saved.");
+    }
+  };
+
+  const matchPlexMedia = async () => {
+    setPlexMessage("Matching Plex media...");
+    setPlexResult(undefined);
+    try {
+      const result = await api.matchPlexMedia();
+      setPlexResult(result);
+      setPlexMessage("");
+      await refresh();
+    } catch (error) {
+      setPlexMessage(error instanceof Error ? error.message : "Plex media could not be matched.");
+    }
+  };
+
+  const selectPlexSection = async (section: PlexLibrarySection) => {
+    const nextSettings = { ...plexSettings, sectionKey: section.key };
+    setPlexSettings(nextSettings);
+    setPlexMessage(`Saving ${section.title}...`);
+    try {
+      setPlexSettings(await api.savePlexSettings(nextSettings));
+      setPlexMessage(`${section.title} selected.`);
+    } catch (error) {
+      setPlexMessage(error instanceof Error ? error.message : "Plex library could not be selected.");
+    }
+  };
+
+  const loadPlexSections = async () => {
+    setPlexMessage("Loading Plex libraries...");
+    try {
+      const sections = await api.plexSections(plexSettings.serverUrl);
+      setPlexSections(sections);
+      setPlexMessage(sections.length === 0 ? "No Plex libraries were found." : "");
+    } catch (error) {
+      setPlexMessage(error instanceof Error ? error.message : "Plex libraries could not be loaded.");
+    }
+  };
+
+  const loadAdminUsers = async () => {
+    setAdminUsers(await api.users());
+  };
+
+  const loadInvites = async () => {
+    setAdminInvites(await api.invites());
+  };
+
+  const loadRemoteAccessSettings = async () => {
+    const settings = await api.remoteAccessSettings();
+    setRemoteSettings(settings);
+    setRemoteMode(settings.mode);
+    setRemotePublicUrl(settings.publicUrl);
+  };
+
+  const saveRemoteAccessSettings = async (event: FormEvent) => {
+    event.preventDefault();
+    setUserMessage("");
+    try {
+      const settings = await api.saveRemoteAccessSettings({ mode: remoteMode, publicUrl: remotePublicUrl });
+      setRemoteSettings(settings);
+      setRemoteMode(settings.mode);
+      setRemotePublicUrl(settings.publicUrl);
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Remote access settings could not be saved.");
+    }
+  };
+
+  const createInvite = async (event: FormEvent) => {
+    event.preventDefault();
+    setUserMessage("");
+    setInviteLink("");
+    try {
+      const days = Number(inviteDays);
+      const invite = await api.createInvite({
+        email: inviteEmail,
+        role: inviteRole,
+        expiresInDays: Number.isFinite(days) && days > 0 ? days : undefined
+      });
+      const baseUrl = remoteSettings?.publicUrl || window.location.origin;
+      setInviteLink(`${baseUrl.replace(/\/$/, "")}/?invite=${invite.token}`);
+      setInviteEmail("");
+      setInviteRole("user");
+      await loadInvites();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Invite could not be created.");
+    }
+  };
+
+  const revokeInvite = async (invite: UserInvite) => {
+    setUserMessage("");
+    try {
+      await api.revokeInvite(invite.id);
+      await loadInvites();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Invite could not be revoked.");
+    }
+  };
+
+  const createManagedUser = async (event: FormEvent) => {
+    event.preventDefault();
+    setUserMessage("");
+    try {
+      await api.createUser({ name: newUserName, email: newUserEmail, role: newUserRole });
+      setNewUserName("");
+      setNewUserEmail("");
+      setNewUserRole("user");
+      await loadAdminUsers();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "User could not be saved.");
+    }
+  };
+
+  const updateManagedUserRole = async (targetUser: User, role: "admin" | "user") => {
+    setUserMessage("");
+    try {
+      await api.updateUserRole(targetUser.id, role);
+      await loadAdminUsers();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Role could not be changed.");
+    }
+  };
+
+  const updateManagedUserStatus = async (targetUser: User, status: "active" | "disabled") => {
+    setUserMessage("");
+    try {
+      await api.updateUserStatus(targetUser.id, status);
+      await loadAdminUsers();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "User status could not be changed.");
+    }
+  };
+
+  const deleteManagedUser = async (targetUser: User) => {
+    setUserMessage("");
+    try {
+      await api.deleteUser(targetUser.id);
+      await loadAdminUsers();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "User could not be removed.");
+    }
+  };
+
+  if (!authChecked) {
+    return <main className="login-shell">Loading Story Stack...</main>;
+  }
+
+  if (!user) {
+    return <LoginScreen api={api} message={loginMessage} onMessage={setLoginMessage} onSignedIn={refresh} />;
+  }
+
+  return (
+    <main className={space === "store" ? "app-shell store-space" : "app-shell"}>
+      <header className="app-topbar">
+        <div className="app-brand">
+          {space === "store" ? <Store size={27} /> : <BookMarked size={27} />}
+          <span>Story Stack</span>
+        </div>
+        <div className="app-title">
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
+        <label className="search-box topbar-search">
+          <Search size={18} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search books, authors, narrators" />
+        </label>
+        <div className="topbar-actions">
+          <button
+            className={space === "store" ? "store-button active" : "store-button"}
+            onClick={() => {
+              if (space === "store") {
+                setSpace("library");
+                setView("home");
+                setLibraryCategoryKey(undefined);
+              } else {
+                setSpace("store");
+                setView("home");
+                setStoreBrowseMode("title");
+                setStoreCategoryKey(undefined);
+              }
+            }}
+          >
+            {space === "store" ? <Library size={18} /> : <Store size={18} />}
+            {space === "store" ? "My Library" : "Store"}
+          </button>
+          {space === "store" && user?.role === "admin" && (
+            <button className={view === "admin" ? "settings-button active" : "settings-button"} onClick={() => setView("admin")}>
+              <Settings size={18} />
+              Settings
+            </button>
+          )}
+          <div className="account-menu" ref={accountMenuRef}>
+            <button
+              className="account-button"
+              onClick={() => setAccountOpen((open) => !open)}
+              aria-expanded={accountOpen}
+              aria-label="Open account menu"
+            >
+              <span>{user.name}</span>
+              <UserRound size={18} />
+            </button>
+            {accountOpen && (
+              <section className="account-panel">
+                <div className="account-panel-header">
+                  <UserRound size={22} />
+                  <div>
+                    <strong>{user.name}</strong>
+                    <span>{user.email ?? user.username ?? "Plex account"}</span>
+                  </div>
+                </div>
+                <dl className="account-details">
+                  <div>
+                    <dt>Role</dt>
+                    <dd>{user.role === "admin" ? "Admin" : "User"}</dd>
+                  </div>
+                  <div>
+                    <dt>Sign in</dt>
+                    <dd>{user.plexId ? "Plex" : "Story Stack"}</dd>
+                  </div>
+                </dl>
+                <button className="command-button account-signout" onClick={() => void logout()}>
+                  Sign Out
+                </button>
+              </section>
+            )}
+          </div>
+        </div>
+      </header>
+      <aside className="sidebar">
+        <nav>
+          <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>
+            <Home size={18} />
+            Home
+          </button>
+          <button
+            className={view === "library" ? "active" : ""}
+            onClick={() => {
+              setView("library");
+              if (space === "store") {
+                setStoreBrowseMode("title");
+                setStoreCategoryKey(undefined);
+              }
+            }}
+          >
+            <Library size={18} />
+            {space === "store" ? "Books" : "Library"}
+          </button>
+          <button
+            className={view === "series" ? "active" : ""}
+            onClick={() => {
+              setView("series");
+              if (space === "store") {
+                setStoreBrowseMode("series");
+                setStoreCategoryKey(undefined);
+              }
+            }}
+          >
+            <BookMarked size={18} />
+            Series
+          </button>
+          <button
+            className={view === "authors" ? "active" : ""}
+            onClick={() => {
+              setView("authors");
+              if (space === "store") {
+                setStoreBrowseMode("author");
+                setStoreCategoryKey(undefined);
+              }
+            }}
+          >
+            <Users size={18} />
+            Authors
+          </button>
+          <button
+            className={view === "genres" ? "active" : ""}
+            onClick={() => {
+              setView("genres");
+              if (space === "store") {
+                setStoreBrowseMode("genre");
+                setStoreCategoryKey(undefined);
+              }
+            }}
+          >
+            <Tags size={18} />
+            Genres
+          </button>
+          {space === "library" && (
+            <>
+              <button className={view === "shelves" ? "active" : ""} onClick={() => setView("shelves")}>
+                <BookMarked size={18} />
+                Shelves
+              </button>
+              <button className={view === "downloads" ? "active" : ""} onClick={() => setView("downloads")}>
+                <Download size={18} />
+                Downloads
+              </button>
+            </>
+          )}
+        </nav>
+      </aside>
+
+      <section className="workspace">
+        {selectedBook ? (
+          <BookDetailPage
+            book={selectedBook}
+            inLibrary={libraryIds.has(selectedBook.id) || Boolean(selectedBook.inLibrary)}
+            onAdd={() => void addToLibrary(selectedBook)}
+            onBack={() => setSelectedBook(undefined)}
+            onPlay={() => startPlayback(selectedBook, selectedBookSpace === "store" ? "sample" : "play")}
+            onRemove={() => void removeFromLibrary(selectedBook)}
+            source={selectedBookSpace}
+          />
+        ) : space === "store" && view === "admin" && user?.role === "admin" ? (
+          <section className="admin-panel settings-console">
+            <nav className="settings-tabs" aria-label="Settings sections">
+              <button className={settingsTab === "access" ? "active" : ""} onClick={() => setSettingsTab("access")}>
+                Access
+              </button>
+              <button className={settingsTab === "catalog" ? "active" : ""} onClick={() => setSettingsTab("catalog")}>
+                Catalog
+              </button>
+            </nav>
+            {settingsTab === "access" && (
+            <section className="settings-panel">
+              <div className="settings-section-heading">
+                <h2>Access</h2>
+                <span>{adminUsers.length} users</span>
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-label">
+                  <strong>Remote Access</strong>
+                  <span>{remoteSettings?.status === "ready" ? "Ready" : remoteSettings?.status === "warning" ? "Needs attention" : "Not configured"}</span>
+                </div>
+                <form className="settings-inline-form remote-access-form" onSubmit={saveRemoteAccessSettings}>
+                  <select value={remoteMode} onChange={(event) => setRemoteMode(event.target.value as RemoteAccessSettings["mode"])}>
+                    <option value="local">Local only</option>
+                    <option value="cloudflare">Cloudflare Tunnel</option>
+                    <option value="manual">Manual HTTPS URL</option>
+                  </select>
+                  <input
+                    value={remotePublicUrl}
+                    onChange={(event) => setRemotePublicUrl(event.target.value)}
+                    placeholder="https://story-stack.example.com"
+                  />
+                  <button className="primary command-button">Save</button>
+                </form>
+              </div>
+              {remoteSettings && <div className={`settings-message compact ${remoteSettings.status}`}>{remoteSettings.message}</div>}
+              <div className="settings-row">
+                <div className="settings-row-label">
+                  <strong>Invite Listener</strong>
+                  <span>{adminInvites.filter((invite) => invite.status === "pending").length} pending</span>
+                </div>
+                <form className="settings-inline-form invite-form" onSubmit={createInvite}>
+                  <input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="Listener email" type="email" />
+                  <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "admin" | "user")}>
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <input value={inviteDays} onChange={(event) => setInviteDays(event.target.value)} placeholder="Days" inputMode="numeric" />
+                  <button className="primary command-button">Invite</button>
+                </form>
+              </div>
+              {inviteLink && (
+                <div className="settings-message compact">
+                  Invite link ready: <span>{inviteLink}</span>
+                </div>
+              )}
+              <div className="compact-list">
+                {adminInvites.map((invite) => (
+                  <article className="managed-user-row invite-row" key={invite.id}>
+                    <UserRound size={17} />
+                    <div>
+                      <strong>{invite.email}</strong>
+                      <span>
+                        {invite.role} - {invite.status}
+                      </span>
+                    </div>
+                    <span>{invite.expiresAt ? new Date(invite.expiresAt).toLocaleDateString() : "No expiry"}</span>
+                    <button className="icon-button" onClick={() => void revokeInvite(invite)} title="Revoke invite" disabled={invite.status !== "pending"}>
+                      <Trash2 size={15} />
+                    </button>
+                  </article>
+                ))}
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-label">
+                  <strong>Add User</strong>
+                  <span>Manual account</span>
+                </div>
+                <form className="settings-inline-form user-create-form" onSubmit={createManagedUser}>
+                  <input value={newUserName} onChange={(event) => setNewUserName(event.target.value)} placeholder="Name" />
+                  <input value={newUserEmail} onChange={(event) => setNewUserEmail(event.target.value)} placeholder="Email" type="email" />
+                  <select value={newUserRole} onChange={(event) => setNewUserRole(event.target.value as "admin" | "user")}>
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button className="primary command-button">Add</button>
+                </form>
+              </div>
+              {userMessage && <div className="settings-message">{userMessage}</div>}
+              <div className="user-management-list">
+                {adminUsers.map((item) => (
+                  <article className="managed-user-row" key={item.id}>
+                    <UserRound size={20} />
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>{item.email ?? item.username ?? "Plex account"}</span>
+                    </div>
+                    <select
+                      className="role-select"
+                      value={item.role}
+                      onChange={(event) => void updateManagedUserRole(item, event.target.value as "admin" | "user")}
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <select
+                      className="role-select"
+                      value={item.status ?? "active"}
+                      onChange={(event) => void updateManagedUserStatus(item, event.target.value as "active" | "disabled")}
+                    >
+                      <option value="active">Active</option>
+                      <option value="disabled">Disabled</option>
+                    </select>
+                    <button className="icon-button" onClick={() => void deleteManagedUser(item)} title="Remove user">
+                      <Trash2 size={16} />
+                    </button>
+                  </article>
+                ))}
+                {adminUsers.length === 0 && <div className="empty-state">No users have signed in yet.</div>}
+              </div>
+            </section>
+            )}
+            {settingsTab === "catalog" && (
+            <section className="settings-panel">
+              <div className="settings-section-heading">
+                <h2>Catalog</h2>
+                <span>Audiobooks and metadata</span>
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-label">
+                  <strong>Audiobook Folder</strong>
+                  <span>Store source</span>
+                </div>
+                <form className="settings-inline-form catalog-path-form" onSubmit={saveCatalogSettings}>
+                  <input
+                    value={catalogPath}
+                    onChange={(event) => setCatalogPath(event.target.value)}
+                    placeholder="/srv/media/audiobooks"
+                  />
+                  <button className="primary command-button">Save</button>
+                  <button className="command-button" type="button" onClick={() => void syncCatalog()}>
+                    <RefreshCw size={16} />
+                    Scan
+                  </button>
+                </form>
+              </div>
+              {catalogMessage && <div className="settings-message compact">{catalogMessage}</div>}
+              {catalogResult && <CatalogSyncSummary result={catalogResult} />}
+              <div className="settings-row">
+                <div className="settings-row-label">
+                  <strong>Metadata</strong>
+                  <span>Google Books</span>
+                </div>
+                <button className="primary command-button" onClick={() => void runMetadataEnrichment()}>
+                  <Sparkles size={16} />
+                  Find Missing
+                </button>
+              </div>
+              {metadataMessage && <div className="settings-message compact">{metadataMessage}</div>}
+              {metadataResult && <MetadataSummary result={metadataResult} />}
+              <div className="settings-row">
+                <div className="settings-row-label">
+                  <strong>Plex Media</strong>
+                  <span>Optional playback matching</span>
+                </div>
+                <form className="settings-inline-form plex-settings-form" onSubmit={savePlexSettings}>
+                  <input
+                    value={plexSettings.serverUrl}
+                    onChange={(event) => setPlexSettings((current) => ({ ...current, serverUrl: event.target.value }))}
+                    placeholder="http://plex-server:32400"
+                  />
+                  <button className="primary command-button">Save</button>
+                </form>
+              </div>
+              <div className="settings-action-row">
+                <button className="command-button" onClick={() => void loadPlexSections()}>
+                  Load Libraries
+                </button>
+                <button className="command-button" onClick={() => void matchPlexMedia()}>
+                  <RefreshCw size={16} />
+                  Match Media
+                </button>
+              </div>
+              {plexSections.length > 0 && (
+                <div className="plex-section-list">
+                  {plexSections.map((section) => (
+                    <button
+                      className={plexSettings.sectionKey === section.key ? "active" : ""}
+                      key={section.key}
+                      onClick={() => void selectPlexSection(section)}
+                    >
+                      <span className="plex-section-title-row">
+                        <strong>{section.title}</strong>
+                        {plexSettings.sectionKey === section.key && <em>Selected</em>}
+                      </span>
+                      <span>{section.type}</span>
+                      {section.locations.length > 0 && <small>{section.locations.join(" | ")}</small>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {plexMessage && <div className="settings-message compact">{plexMessage}</div>}
+              {plexResult && <PlexMatchSummary result={plexResult} />}
+            </section>
+            )}
+          </section>
+        ) : space === "library" && view === "shelves" ? (
+          <section className="shelf-workspace">
+            {selectedShelf ? (
+              <ShelfBookBrowser
+                books={selectedShelfBooks}
+                inLibraryIds={libraryIds}
+                onAdd={addToLibrary}
+                onBack={() => {
+                  setSelectedShelf(undefined);
+                  setSelectedShelfBooks([]);
+                }}
+                onMoveToShelf={moveToShelf}
+                onOfflineSave={saveOffline}
+                offlineStateFor={offlineStateFor}
+                onPlay={(book) => startPlayback(book, "play")}
+                onRemove={removeFromLibrary}
+                onSelect={(book) => selectBook(book, "library")}
+                shelf={selectedShelf}
+                shelves={shelves}
+              />
+            ) : (
+              <>
+                <form className="shelf-form" onSubmit={createShelf}>
+                  <input value={shelfName} onChange={(event) => setShelfName(event.target.value)} placeholder="New shelf name" />
+                  <button className="primary command-button">Create Shelf</button>
+                </form>
+                <div className="shelf-list">
+                  {shelves.map((shelf) => (
+                    <ShelfRow key={shelf.id} shelf={shelf} books={libraryBooks} api={api} onOpen={() => void openShelf(shelf)} />
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        ) : space === "library" && view === "downloads" ? (
+          <DownloadsBrowser
+            books={downloadedBooks}
+            onPlay={(book) => startPlayback(book, "play")}
+            onRemove={(book) => void removeOffline(book)}
+            onSelect={(book) => selectBook(book, "library")}
+          />
+        ) : space === "library" && view === "home" ? (
+          <HomeDashboard
+            books={libraryBooks}
+            emptyText="Your library is empty. Open the Store to add books."
+            inLibraryIds={libraryIds}
+            onAdd={addToLibrary}
+            onMoveToShelf={moveToShelf}
+            onOfflineSave={saveOffline}
+            offlineStateFor={offlineStateFor}
+            onOpenStore={() => {
+              setSpace("store");
+              setView("home");
+              setStoreBrowseMode("title");
+              setStoreCategoryKey(undefined);
+            }}
+            onPlay={(book) => startPlayback(book, "play")}
+            onRemove={removeFromLibrary}
+            onSelect={(book) => selectBook(book, "library")}
+            shelves={shelves}
+            title="Library Home"
+          />
+        ) : space === "store" && view === "home" ? (
+          <StoreDashboard
+            books={storeBooks}
+            inLibraryIds={libraryIds}
+            onAdd={addToLibrary}
+            onAddGroup={addBooksToLibrary}
+            onBrowse={(mode) => {
+              setStoreBrowseMode(mode);
+              setStoreCategoryKey(undefined);
+              setView(viewForBrowseMode(mode));
+            }}
+            onBrowseCategory={(mode, key) => {
+              setStoreBrowseMode(mode);
+              setStoreCategoryKey(key);
+              setView(viewForBrowseMode(mode));
+            }}
+            onMoveToShelf={moveToShelf}
+            onPlay={(book) => startPlayback(book, "sample")}
+            onRemove={removeFromLibrary}
+            onSelect={(book) => selectBook(book, "store")}
+            shelves={shelves}
+          />
+        ) : space === "library" && (view === "library" || view === "series" || view === "authors" || view === "genres") ? (
+          <BookCollectionBrowser
+            books={libraryBooks}
+            browseMode={effectiveLibraryBrowseMode}
+            categoryKey={libraryCategoryKey}
+            emptyText="No library books match that browse view."
+            inLibraryIds={libraryIds}
+            query={query}
+            onAdd={addToLibrary}
+            onAddGroup={addBooksToLibrary}
+            onCategoryChange={setLibraryCategoryKey}
+            onMoveToShelf={moveToShelf}
+            onOfflineSave={saveOffline}
+            offlineStateFor={offlineStateFor}
+            onPlay={(book) => startPlayback(book, "play")}
+            onRemove={removeFromLibrary}
+            onRemoveGroup={removeBooksFromLibrary}
+            onSelect={(book) => selectBook(book, "library")}
+            shelves={shelves}
+            variant="library"
+          />
+        ) : (
+          <BookCollectionBrowser
+            books={storeBooks}
+            browseMode={effectiveStoreBrowseMode}
+            categoryKey={storeCategoryKey}
+            emptyText="No Store books match that browse view."
+            inLibraryIds={libraryIds}
+            query={query}
+            onAdd={addToLibrary}
+            onAddGroup={addBooksToLibrary}
+            onCategoryChange={setStoreCategoryKey}
+            onMoveToShelf={moveToShelf}
+            onPlay={(book) => startPlayback(book, "sample")}
+            onRemove={removeFromLibrary}
+            onSelect={(book) => selectBook(book, "store")}
+            shelves={shelves}
+            variant={space}
+          />
+        )}
+      </section>
+
+      <PlayerBar playback={playback} api={api} />
+    </main>
+  );
+}
+
+function BookDetailPage({
+  book,
+  inLibrary,
+  onAdd,
+  onBack,
+  onPlay,
+  onRemove,
+  source
+}: {
+  book: Book;
+  inLibrary: boolean;
+  onAdd: () => void;
+  onBack: () => void;
+  onPlay: () => void;
+  onRemove: () => void;
+  source: Space;
+}) {
+  return (
+    <section className="book-detail-page">
+      <button className="detail-back-button" onClick={onBack} aria-label="Back">
+        <ArrowLeft size={21} />
+      </button>
+      <div className="book-detail-layout">
+        <div className="book-detail-cover">
+          <BookCover book={book} />
+        </div>
+        <div className="book-detail-main">
+          <div className="book-detail-heading">
+            <h2>{book.title}</h2>
+            {book.subtitle && <p>{book.subtitle}</p>}
+          </div>
+          <dl className="book-detail-meta">
+            <div>
+              <dt>Author</dt>
+              <dd>{book.author}</dd>
+            </div>
+            {book.narrator && (
+              <div>
+                <dt>Narrator</dt>
+                <dd>{book.narrator}</dd>
+              </div>
+            )}
+            {book.series && (
+              <div>
+                <dt>Series</dt>
+                <dd>
+                  {book.series}
+                  {book.seriesOrder ? ` #${book.seriesOrder}` : ""}
+                </dd>
+              </div>
+            )}
+            {book.publicationYear && (
+              <div>
+                <dt>Published</dt>
+                <dd>{book.publicationYear}</dd>
+              </div>
+            )}
+            {book.genres.length > 0 && (
+              <div>
+                <dt>Genres</dt>
+                <dd>{book.genres.join(", ")}</dd>
+              </div>
+            )}
+          </dl>
+          <div className="book-detail-actions">
+            <button className="primary command-button" onClick={inLibrary ? onRemove : onAdd}>
+              {inLibrary ? "Remove from Library" : "Add to Library"}
+            </button>
+            <button className="command-button" onClick={onPlay}>
+              {source === "store" ? "Sample" : "Play"}
+            </button>
+          </div>
+          <section className="book-detail-description">
+            <h3>Description</h3>
+            <p>{book.description ?? "No description imported yet."}</p>
+          </section>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MetadataSummary({ result }: { result: MetadataEnrichmentResult }) {
+  const finishedAt = new Date(result.finishedAt);
+  return (
+    <section className="metadata-summary">
+      <div className="settings-section-heading">
+        <h2>Metadata Complete</h2>
+        <span>{Number.isNaN(finishedAt.getTime()) ? "Just now" : finishedAt.toLocaleString()}</span>
+      </div>
+      <div className="sync-summary-grid">
+        <span>
+          <strong>{result.scanned}</strong>
+          Checked
+        </span>
+        <span>
+          <strong>{result.matched}</strong>
+          Matched
+        </span>
+        <span>
+          <strong>{result.coversAdded}</strong>
+          Covers
+        </span>
+        <span>
+          <strong>{result.detailsAdded}</strong>
+          Details
+        </span>
+      </div>
+      {result.errors.length > 0 && <p>{result.errors.slice(0, 3).join(" ")}</p>}
+    </section>
+  );
+}
+
+function CatalogSyncSummary({ result }: { result: SyncResult }) {
+  const finishedAt = new Date(result.finishedAt);
+  return (
+    <section className="metadata-summary">
+      <div className="settings-section-heading">
+        <h2>Scan Complete</h2>
+        <span>{Number.isNaN(finishedAt.getTime()) ? "Just now" : finishedAt.toLocaleString()}</span>
+      </div>
+      <div className="sync-summary-grid">
+        <span>
+          <strong>{result.scanned}</strong>
+          Scanned
+        </span>
+        <span>
+          <strong>{result.imported}</strong>
+          New
+        </span>
+        <span>
+          <strong>{result.updated}</strong>
+          Updated
+        </span>
+        <span>
+          <strong>{result.removed}</strong>
+          Removed
+        </span>
+      </div>
+      {result.path && <p>Scanned {result.path}</p>}
+      {result.errors.length > 0 && <p>{result.errors.slice(0, 3).join(" ")}</p>}
+    </section>
+  );
+}
+
+function PlexMatchSummary({ result }: { result: PlexMatchResult }) {
+  const finishedAt = new Date(result.finishedAt);
+  return (
+    <section className="metadata-summary">
+      <div className="settings-section-heading">
+        <h2>Plex Match Complete</h2>
+        <span>{Number.isNaN(finishedAt.getTime()) ? "Just now" : finishedAt.toLocaleString()}</span>
+      </div>
+      <div className="sync-summary-grid">
+        <span>
+          <strong>{result.scanned}</strong>
+          Checked
+        </span>
+        <span>
+          <strong>{result.matched}</strong>
+          Matched
+        </span>
+        <span>
+          <strong>{result.unmatched}</strong>
+          Unmatched
+        </span>
+        <span>
+          <strong>{result.errors.length}</strong>
+          Issues
+        </span>
+      </div>
+      {result.errors.length > 0 && <p>{result.errors.slice(0, 3).join(" ")}</p>}
+    </section>
+  );
+}
+
+function LoginScreen({
+  api,
+  message,
+  onMessage,
+  onSignedIn
+}: {
+  api: ApiClient;
+  message: string;
+  onMessage: (message: string) => void;
+  onSignedIn: () => Promise<void>;
+}) {
+  const [pin, setPin] = useState<PlexPin>();
+  const [invite, setInvite] = useState<Pick<UserInvite, "email" | "role" | "expiresAt">>();
+  const [inviteToken, setInviteToken] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("invite") ?? "";
+    if (!token) {
+      return;
+    }
+    setInviteToken(token);
+    void api
+      .invite(token)
+      .then((nextInvite) => {
+        setInvite(nextInvite);
+        setUsername(nextInvite.email);
+      })
+      .catch((error) => onMessage(error instanceof Error ? error.message : "Invite could not be loaded."));
+  }, [api, onMessage]);
+
+  const signIn = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    onMessage("");
+    try {
+      await api.login(username, password);
+      await onSignedIn();
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "Sign in failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const acceptInvite = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    onMessage("");
+    try {
+      await api.acceptInvite(inviteToken, { name: inviteName, password: invitePassword });
+      window.history.replaceState({}, "", window.location.pathname);
+      await onSignedIn();
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "Invite could not be accepted.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const startPlex = async () => {
+    setSubmitting(true);
+    onMessage("");
+    try {
+      const nextPin = await api.startPlexLogin();
+      setPin(nextPin);
+      window.open(nextPin.authUrl, "_blank", "noopener,noreferrer");
+      onMessage("Approve the Plex sign-in, then Story Stack will finish automatically.");
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : "Plex login could not be started.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!pin) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void api
+        .pollPlexLogin(pin.id)
+        .then((result) => {
+          if ("user" in result) {
+            window.clearInterval(timer);
+            void onSignedIn();
+          }
+        })
+        .catch((error) => {
+          window.clearInterval(timer);
+          onMessage(error instanceof Error ? error.message : "Plex login failed.");
+        });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [api, onMessage, onSignedIn, pin]);
+
+  return (
+    <main className="login-shell">
+      <section className="login-panel">
+        <div className="login-brand">
+          <BookMarked size={34} />
+          <span>Story Stack</span>
+        </div>
+        {invite ? (
+          <form className="login-form" onSubmit={acceptInvite}>
+            <p>Accept your invite for {invite.email}.</p>
+            <label>
+              Name
+              <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Your name" autoFocus />
+            </label>
+            <label>
+              Password
+              <input value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} placeholder="At least 8 characters" type="password" />
+            </label>
+            {message && <p className="login-message">{message}</p>}
+            <button className="primary command-button" disabled={submitting}>
+              {submitting ? "Creating Account..." : "Create Account"}
+            </button>
+          </form>
+        ) : (
+          <form className="login-form" onSubmit={signIn}>
+            <label>
+              Email or username
+              <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="you@example.com" autoFocus />
+            </label>
+            <label>
+              Password
+              <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" />
+            </label>
+            {message && <p className="login-message">{message}</p>}
+            <button className="primary command-button" disabled={submitting}>
+              {submitting ? "Signing In..." : "Sign In"}
+            </button>
+          </form>
+        )}
+        <div className="login-form login-secondary">
+          <p>Plex sign-in is optional for servers that enable Plex integration.</p>
+          {pin && (
+            <div className="plex-code-panel">
+              <span>Plex code</span>
+              <strong>{pin.code}</strong>
+              <a href={pin.authUrl} target="_blank" rel="noreferrer">
+                Open Plex Sign In
+              </a>
+            </div>
+          )}
+          <button className="command-button" disabled={submitting} onClick={() => void startPlex()}>
+            {submitting ? "Starting Plex..." : pin ? "Open Plex Again" : "Sign In with Plex"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function HomeDashboard({
+  books,
+  emptyText,
+  inLibraryIds,
+  onAdd,
+  onMoveToShelf,
+  onOfflineSave,
+  offlineStateFor,
+  onOpenStore,
+  onPlay,
+  onRemove,
+  onSelect,
+  shelves,
+  title,
+  variant = "library"
+}: {
+  books: Book[];
+  emptyText: string;
+  inLibraryIds: Set<string>;
+  onAdd: (book: Book) => Promise<void>;
+  onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onOfflineSave: (book: Book) => Promise<void>;
+  offlineStateFor: (book: Book) => OfflineState;
+  onOpenStore: () => void;
+  onPlay: (book: Book) => void;
+  onRemove: (book: Book) => Promise<void>;
+  onSelect: (book: Book) => void;
+  shelves: Shelf[];
+  title: string;
+  variant?: "library" | "store";
+}) {
+  const sections = useMemo(() => buildDashboardSections(books), [books]);
+
+  if (books.length === 0) {
+    return (
+      <section className="empty-dashboard">
+        <h2>{title}</h2>
+        <p>{emptyText}</p>
+        <button className="primary command-button" onClick={onOpenStore}>
+          <Store size={17} />
+          Open Store
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="home-dashboard">
+      {sections.map((section) => (
+        <DashboardRow
+          key={section.title}
+          books={section.books}
+          inLibraryIds={inLibraryIds}
+          onAdd={onAdd}
+          onMoveToShelf={onMoveToShelf}
+          onOfflineSave={onOfflineSave}
+          offlineStateFor={offlineStateFor}
+          onPlay={onPlay}
+          onRemove={onRemove}
+          onSelect={onSelect}
+          shelves={shelves}
+          title={section.title}
+        />
+      ))}
+    </section>
+  );
+}
+
+function StoreDashboard({
+  books,
+  inLibraryIds,
+  onAdd,
+  onAddGroup,
+  onBrowse,
+  onBrowseCategory,
+  onMoveToShelf,
+  onPlay,
+  onRemove,
+  onSelect,
+  shelves
+}: {
+  books: Book[];
+  inLibraryIds: Set<string>;
+  onAdd: (book: Book) => Promise<void>;
+  onAddGroup: (books: Book[]) => Promise<void>;
+  onBrowse: (mode: BookBrowseMode) => void;
+  onBrowseCategory: (mode: BookBrowseMode, key: string) => void;
+  onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onPlay: (book: Book) => void;
+  onRemove: (book: Book) => Promise<void>;
+  onSelect: (book: Book) => void;
+  shelves: Shelf[];
+}) {
+  const sections = useMemo(() => buildDashboardSections(books), [books]);
+  const storeStats = useMemo(() => {
+    const browser = new BookBrowser(books);
+    return {
+      authors: browser.browse("author").length,
+      series: browser.browse("series").length,
+      genres: browser.browse("genre").length
+    };
+  }, [books]);
+  const featuredBook = useMemo(() => randomBook(books), [books]);
+  const categoryRows = useMemo(
+    () =>
+      [
+        { title: "Series", mode: "series" as const },
+        { title: "Authors", mode: "author" as const },
+        { title: "Genres", mode: "genre" as const }
+      ].map((row) => ({ ...row, groups: new BookBrowser(books).browse(row.mode).slice(0, 8) })),
+    [books]
+  );
+
+  return (
+    <section className="home-dashboard">
+      <section className="store-hero-shell">
+        <section className="store-hero">
+          <div className="store-hero-main">
+            <div className="store-hero-copy">
+              <h2>Find your next listen</h2>
+            </div>
+            {featuredBook && (
+              <article className="featured-book">
+                <button className="featured-cover-button" onClick={() => onSelect(featuredBook)} aria-label={`Open ${featuredBook.title}`}>
+                  <BookCover book={featuredBook} />
+                </button>
+                <div className="featured-book-copy">
+                  <span>Featured Listen</span>
+                  <button onClick={() => onSelect(featuredBook)}>{featuredBook.title}</button>
+                  <p>{featuredBook.author}</p>
+                  <div className="featured-book-meta">
+                    {featuredBook.series && (
+                      <span>
+                        {featuredBook.series}
+                        {featuredBook.seriesOrder ? ` #${featuredBook.seriesOrder}` : ""}
+                      </span>
+                    )}
+                    {featuredBook.publicationYear && <span>{featuredBook.publicationYear}</span>}
+                    {featuredBook.genres.slice(0, 2).map((genre) => (
+                      <span key={genre}>{genre}</span>
+                    ))}
+                  </div>
+                  {featuredBook.description && <p className="featured-book-description">{cleanDescription(featuredBook.description)}</p>}
+                  <div className="featured-book-actions">
+                    {!inLibraryIds.has(featuredBook.id) && !featuredBook.inLibrary && (
+                      <button className="primary command-button" onClick={() => void onAdd(featuredBook)}>
+                        <Plus size={16} />
+                        Add
+                      </button>
+                    )}
+                    <button className="command-button" onClick={() => onPlay(featuredBook)}>
+                      Sample
+                    </button>
+                  </div>
+                </div>
+              </article>
+            )}
+          </div>
+        </section>
+        <div className="store-stat-grid" aria-label="Store collection summary">
+          <span>
+            <strong>{books.length}</strong>
+            Books
+          </span>
+          <span>
+            <strong>{storeStats.authors}</strong>
+            Authors
+          </span>
+          <span>
+            <strong>{storeStats.series}</strong>
+            Series
+          </span>
+          <span>
+            <strong>{storeStats.genres}</strong>
+            Genres
+          </span>
+        </div>
+      </section>
+      {sections.slice(0, 2).map((section) => (
+        <DashboardRow
+          key={section.title}
+          books={section.books}
+          inLibraryIds={inLibraryIds}
+          onAdd={onAdd}
+          onMoveToShelf={onMoveToShelf}
+          onPlay={onPlay}
+          onRemove={onRemove}
+          onSelect={onSelect}
+          shelves={shelves}
+          title={section.title === "Recently Added" ? "New in Store" : section.title}
+          variant="store"
+        />
+      ))}
+      {categoryRows.map((row) => (
+        <section className="dashboard-section" key={row.title}>
+          <div className="section-heading">
+            <h2>{row.title}</h2>
+            <button onClick={() => onBrowse(row.mode)}>View all</button>
+          </div>
+          <div className="category-strip">
+            {row.groups.map((group) => (
+              <CategoryCard
+                compact
+                group={group}
+                inLibraryIds={inLibraryIds}
+                key={group.key}
+                onAdd={() => onAddGroup(group.books)}
+                onOpen={() => onBrowseCategory(row.mode, group.key)}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </section>
+  );
+}
+
+function randomBook(books: Book[]): Book | undefined {
+  if (books.length === 0) {
+    return undefined;
+  }
+  return books[Math.floor(Math.random() * books.length)];
+}
+
+function cleanDescription(description: string): string {
+  return description.replace(/&#8212;/g, "-").replace(/<[^>]+>/g, "").trim();
+}
+
+function DashboardRow({
+  books,
+  inLibraryIds,
+  onAdd,
+  onMoveToShelf,
+  onOfflineSave,
+  offlineStateFor,
+  onPlay,
+  onRemove,
+  onSelect,
+  shelves,
+  title,
+  variant = "library"
+}: {
+  books: Book[];
+  inLibraryIds: Set<string>;
+  onAdd: (book: Book) => Promise<void>;
+  onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onOfflineSave?: (book: Book) => Promise<void>;
+  offlineStateFor?: (book: Book) => OfflineState;
+  onPlay: (book: Book) => void;
+  onRemove: (book: Book) => Promise<void>;
+  onSelect: (book: Book) => void;
+  shelves: Shelf[];
+  title: string;
+  variant?: "library" | "store";
+}) {
+  return (
+    <section className="dashboard-section">
+      <div className="section-heading">
+        <h2>{title}</h2>
+      </div>
+      <div className="book-strip">
+        {books.map((book) => (
+          <BookCard
+            key={book.id}
+            book={book}
+            inLibrary={inLibraryIds.has(book.id) || Boolean(book.inLibrary)}
+            onAdd={() => void onAdd(book)}
+            onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
+            onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
+            offlineState={offlineStateFor?.(book) ?? "idle"}
+            onRemove={() => void onRemove(book)}
+            onPlay={() => onPlay(book)}
+            onSelect={() => onSelect(book)}
+            shelves={shelves}
+            variant={variant}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function buildDashboardSections(books: Book[]) {
+  const recentlyAdded = [...books].sort((left, right) => right.addedAt.localeCompare(left.addedAt)).slice(0, 10);
+  const seriesBooks = uniqueBy(
+    books.filter((book) => book.series),
+    (book) => book.series ?? book.id
+  ).slice(0, 10);
+  const authorBooks = uniqueBy(books, (book) => book.author).slice(0, 10);
+  const genreBooks = uniqueBy(
+    books.filter((book) => book.genres.length),
+    (book) => book.genres[0] ?? book.id
+  ).slice(0, 10);
+
+  return [
+    { title: "Recently Added", books: recentlyAdded },
+    { title: "Recent Series", books: seriesBooks },
+    { title: "Authors", books: authorBooks },
+    { title: "Genres", books: genreBooks }
+  ].filter((section) => section.books.length > 0);
+}
+
+function uniqueBy<T>(items: T[], getKey: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    const key = getKey(item);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function BookCollectionBrowser({
+  books,
+  browseMode,
+  categoryKey,
+  emptyText,
+  inLibraryIds,
+  query,
+  onAdd,
+  onAddGroup,
+  onCategoryChange,
+  onMoveToShelf,
+  onOfflineSave,
+  offlineStateFor,
+  onPlay,
+  onRemove,
+  onRemoveGroup,
+  onSelect,
+  shelves,
+  variant
+}: {
+  books: Book[];
+  browseMode: BookBrowseMode;
+  categoryKey?: string;
+  emptyText: string;
+  inLibraryIds: Set<string>;
+  query: string;
+  onAdd: (book: Book) => Promise<void>;
+  onAddGroup?: (books: Book[]) => Promise<void>;
+  onCategoryChange: (key?: string) => void;
+  onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onOfflineSave?: (book: Book) => Promise<void>;
+  offlineStateFor?: (book: Book) => OfflineState;
+  onPlay: (book: Book) => void;
+  onRemove: (book: Book) => Promise<void>;
+  onRemoveGroup?: (books: Book[]) => Promise<void>;
+  onSelect: (book: Book) => void;
+  shelves: Shelf[];
+  variant: "library" | "store";
+}) {
+  const groups = useMemo(
+    () => new BookBrowser(books, { includeStandaloneSeries: variant !== "store" }).browse(browseMode, query),
+    [books, browseMode, query, variant]
+  );
+  const selectedGroup = groups.find((group) => group.key === categoryKey);
+  const titleBooks = useMemo(() => groups.flatMap((group) => group.books), [groups]);
+  const displayedBooks = selectedGroup?.books ?? titleBooks;
+  const missingGroupBookCount = selectedGroup ? new LibraryAddPlanner(inLibraryIds).missingCount(selectedGroup.books) : 0;
+  const removableGroupBookCount = selectedGroup ? new LibraryRemovePlanner().removableCount(selectedGroup.books) : 0;
+  const showCategories = browseMode !== "title" && !selectedGroup;
+  const canAddSelectedGroup = variant === "store" && selectedGroup && (browseMode === "series" || browseMode === "author");
+  const canRemoveSelectedGroup = variant === "library" && selectedGroup && (browseMode === "series" || browseMode === "author");
+  const canAddCategoryGroup = variant === "store" && (browseMode === "series" || browseMode === "author");
+
+  return (
+    <section className="book-browser">
+      {showCategories ? (
+        <section className="category-grid">
+          {groups.map((group) => (
+            <CategoryCard
+              group={group}
+              inLibraryIds={inLibraryIds}
+              key={group.key}
+              onAdd={canAddCategoryGroup ? () => onAddGroup?.(group.books) : undefined}
+              onOpen={() => onCategoryChange(group.key)}
+            />
+          ))}
+        </section>
+      ) : (
+        <section className="book-group">
+          {selectedGroup && (
+            <div className="group-heading">
+              <button className="back-button" onClick={() => onCategoryChange(undefined)}>
+                All {labelForMode(browseMode)}
+              </button>
+              <div>
+                <h2>{selectedGroup.label}</h2>
+                <span>{selectedGroup.books.length} books</span>
+              </div>
+              {canAddSelectedGroup && (
+                <GroupAddButton
+                  missingCount={missingGroupBookCount}
+                  onAdd={() => onAddGroup?.(selectedGroup.books)}
+                  targetLabel={selectedGroup.label}
+                />
+              )}
+              {canRemoveSelectedGroup && (
+                <GroupRemoveButton
+                  count={removableGroupBookCount}
+                  groupType={browseMode === "series" ? "series" : "author"}
+                  onRemove={() => onRemoveGroup?.(selectedGroup.books)}
+                  targetLabel={selectedGroup.label}
+                />
+              )}
+            </div>
+          )}
+          <div className="book-grid">
+            {displayedBooks.map((book) => (
+              <BookCard
+                key={book.id}
+                book={book}
+                inLibrary={inLibraryIds.has(book.id) || Boolean(book.inLibrary)}
+                onAdd={() => void onAdd(book)}
+                onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
+                onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
+                offlineState={offlineStateFor?.(book) ?? "idle"}
+                onRemove={() => void onRemove(book)}
+                onPlay={() => onPlay(book)}
+                onSelect={() => onSelect(book)}
+                shelves={shelves}
+                variant={variant}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {groups.length === 0 && <div className="empty-state">{emptyText}</div>}
+    </section>
+  );
+}
+
+function CategoryCard({
+  compact = false,
+  group,
+  inLibraryIds,
+  onAdd,
+  onOpen
+}: {
+  compact?: boolean;
+  group: { label: string; books: Book[] };
+  inLibraryIds: Set<string>;
+  onAdd?: () => Promise<void> | void;
+  onOpen: () => void;
+}) {
+  const missingCount = new LibraryAddPlanner(inLibraryIds).missingCount(group.books);
+  const [adding, setAdding] = useState(false);
+  const disabled = adding || missingCount === 0;
+
+  const add = async () => {
+    if (disabled || !onAdd) {
+      return;
+    }
+    setAdding(true);
+    try {
+      await onAdd();
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <article className={compact ? "category-card compact" : "category-card"}>
+      <button className="category-open-button" onClick={onOpen}>
+        <CoverStack books={group.books} />
+        <strong>{group.label}</strong>
+        <span>{group.books.length} books</span>
+      </button>
+      {onAdd && (
+        <button
+          className="category-add-button"
+          disabled={disabled}
+          onClick={() => void add()}
+          title={missingCount === 0 ? "Already in My Library" : `Add ${group.label} to My Library`}
+        >
+          <Plus size={16} />
+        </button>
+      )}
+    </article>
+  );
+}
+
+function GroupAddButton({
+  missingCount,
+  onAdd,
+  targetLabel
+}: {
+  missingCount: number;
+  onAdd: () => Promise<void> | void;
+  targetLabel: string;
+}) {
+  const [adding, setAdding] = useState(false);
+  const disabled = adding || missingCount === 0;
+
+  const add = async () => {
+    if (disabled) {
+      return;
+    }
+    setAdding(true);
+    try {
+      await onAdd();
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <button className="group-add-button" disabled={disabled} onClick={() => void add()} title={`Add ${targetLabel} to My Library`}>
+      <Plus size={16} />
+      {missingCount === 0 ? "In Library" : adding ? "Adding..." : `Add ${missingCount} to Library`}
+    </button>
+  );
+}
+
+function GroupRemoveButton({
+  count,
+  groupType,
+  onRemove,
+  targetLabel
+}: {
+  count: number;
+  groupType: "series" | "author";
+  onRemove: () => Promise<void> | void;
+  targetLabel: string;
+}) {
+  const [removing, setRemoving] = useState(false);
+  const disabled = removing || count === 0;
+
+  const remove = async () => {
+    if (disabled) {
+      return;
+    }
+    const confirmed = window.confirm(`Remove all ${count} books in ${targetLabel} from your library?`);
+    if (!confirmed) {
+      return;
+    }
+    setRemoving(true);
+    try {
+      await onRemove();
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <button className="group-action-button danger" disabled={disabled} onClick={() => void remove()} title={`Remove this ${groupType} from My Library`}>
+      <Trash2 size={16} />
+      {removing ? "Removing..." : `Remove ${count}`}
+    </button>
+  );
+}
+
+function CoverStack({ books }: { books: Book[] }) {
+  const covers = books.slice(0, 4);
+  return (
+    <div className="cover-stack" aria-hidden="true">
+      {covers.map((book) => (
+        <BookCover book={book} compact key={book.id} />
+      ))}
+      {covers.length === 0 && <div className="book-cover empty-cover compact-empty-cover" />}
+    </div>
+  );
+}
+
+function labelForMode(mode: BookBrowseMode): string {
+  return {
+    title: "Books",
+    series: "Series",
+    author: "Authors",
+    genre: "Genres"
+  }[mode];
+}
+
+function browseModeForView(view: View, fallback: BookBrowseMode): BookBrowseMode {
+  if (view === "series") {
+    return "series";
+  }
+  if (view === "authors") {
+    return "author";
+  }
+  if (view === "genres") {
+    return "genre";
+  }
+  return fallback;
+}
+
+function viewForBrowseMode(mode: BookBrowseMode): View {
+  if (mode === "series") {
+    return "series";
+  }
+  if (mode === "author") {
+    return "authors";
+  }
+  if (mode === "genre") {
+    return "genres";
+  }
+  return "library";
+}
+
+function DownloadsBrowser({
+  books,
+  onPlay,
+  onRemove,
+  onSelect
+}: {
+  books: Book[];
+  onPlay: (book: Book) => void;
+  onRemove: (book: Book) => void;
+  onSelect: (book: Book) => void;
+}) {
+  if (books.length === 0) {
+    return <div className="empty-state">No books have been saved to this device yet.</div>;
+  }
+
+  return (
+    <section className="book-group">
+      <div className="book-grid">
+        {books.map((book) => (
+          <article className="book-card download-card" key={book.id}>
+            <button className="cover-button" onClick={() => onSelect(book)} aria-label={`Open ${book.title}`}>
+              <BookCover book={book} />
+            </button>
+            <div className="book-card-body">
+              <button className="plain-title" onClick={() => onSelect(book)}>
+                {book.title}
+              </button>
+              <p>{book.author}</p>
+              <div className="book-actions">
+                <button className="icon-button" onClick={() => onPlay(book)} title="Play">
+                  <Play size={17} />
+                </button>
+                <button className="icon-button" onClick={() => onRemove(book)} title="Remove download">
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ShelfBookBrowser({
+  books,
+  inLibraryIds,
+  onAdd,
+  onBack,
+  onMoveToShelf,
+  onOfflineSave,
+  offlineStateFor,
+  onPlay,
+  onRemove,
+  onSelect,
+  shelf,
+  shelves
+}: {
+  books: Book[];
+  inLibraryIds: Set<string>;
+  onAdd: (book: Book) => Promise<void>;
+  onBack: () => void;
+  onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onOfflineSave: (book: Book) => Promise<void>;
+  offlineStateFor: (book: Book) => OfflineState;
+  onPlay: (book: Book) => void;
+  onRemove: (book: Book) => Promise<void>;
+  onSelect: (book: Book) => void;
+  shelf: Shelf;
+  shelves: Shelf[];
+}) {
+  return (
+    <section className="book-group">
+      <div className="group-heading">
+        <button className="back-button" onClick={onBack}>
+          All Shelves
+        </button>
+        <div>
+          <h2>{shelf.name}</h2>
+          <span>{books.length} books</span>
+        </div>
+      </div>
+      {books.length > 0 ? (
+        <div className="book-grid">
+          {books.map((book) => (
+            <BookCard
+              key={book.id}
+              book={book}
+              inLibrary={inLibraryIds.has(book.id) || Boolean(book.inLibrary)}
+              onAdd={() => void onAdd(book)}
+              onMoveToShelf={(targetShelf) => void onMoveToShelf(book, targetShelf)}
+              onOfflineSave={() => void onOfflineSave(book)}
+              offlineState={offlineStateFor(book)}
+              onRemove={() => void onRemove(book)}
+              onPlay={() => onPlay(book)}
+              onSelect={() => onSelect(book)}
+              shelves={shelves}
+              variant="library"
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">This shelf is empty.</div>
+      )}
+    </section>
+  );
+}
+
+function ShelfRow({ shelf, books, api, onOpen }: { shelf: Shelf; books: Book[]; api: ApiClient; onOpen: () => void }) {
+  const [bookId, setBookId] = useState("");
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    void api.shelfBooks(shelf.id).then((items) => setCount(items.length));
+  }, [api, shelf.id]);
+
+  const add = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!bookId) {
+      return;
+    }
+    await api.addBookToShelf(shelf.id, bookId);
+    setBookId("");
+    setCount((value) => value + 1);
+  };
+
+  return (
+    <article className="shelf-row">
+      <button className="shelf-open-button" onClick={onOpen}>
+        <strong>{shelf.name}</strong>
+        <span>{count} books</span>
+      </button>
+      <form onSubmit={add}>
+        <select value={bookId} onChange={(event) => setBookId(event.target.value)}>
+          <option value="">Add a library book</option>
+          {books.map((book) => (
+            <option key={book.id} value={book.id}>
+              {book.title}
+            </option>
+          ))}
+        </select>
+        <button className="command-button">Add</button>
+      </form>
+    </article>
+  );
+}
+
+function viewTitle(space: Space, view: View): string {
+  if (space === "store") {
+    return {
+      home: "Store",
+      library: "Store Books",
+      series: "Store Series",
+      authors: "Store Authors",
+      genres: "Store Genres",
+      shelves: "Store",
+      downloads: "Store",
+      admin: "Collection Settings"
+    }[view];
+  }
+
+  return {
+    home: "Home",
+    library: "Library",
+    series: "Series",
+    authors: "Authors",
+    genres: "Genres",
+    shelves: "Shelves",
+    downloads: "Downloads",
+    admin: "Admin"
+  }[view];
+}
+
+function viewSubtitle(space: Space, view: View, storeCount: number, libraryCount: number): string {
+  if (space === "store") {
+    return {
+      home: `${storeCount} available books`,
+      library: `${storeCount} available books`,
+      series: "Browse Store books by series",
+      authors: "Browse Store books by author",
+      genres: "Browse Store books by genre",
+      shelves: "Store",
+      downloads: "Store",
+      admin: "Store catalog and sync controls"
+    }[view];
+  }
+
+  return {
+    home: `${libraryCount} saved books`,
+    library: `${libraryCount} saved books`,
+    series: "Browse your saved books by series",
+    authors: "Browse your saved books by author",
+    genres: "Browse your saved books by genre",
+    shelves: "Personal organization",
+    downloads: "Saved to this device",
+    admin: "Catalog sync"
+  }[view];
+}
+
+function matchesBookQuery(book: Book, query: string): boolean {
+  const value = query.trim().toLowerCase();
+  if (!value) {
+    return true;
+  }
+  return [book.title, book.author, book.narrator, book.series, ...book.genres].some((field) => field?.toLowerCase().includes(value));
+}

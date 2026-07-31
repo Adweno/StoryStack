@@ -1,0 +1,68 @@
+{
+  "name": "story-stack",
+  "version": "1.0.0",
+  "description": "A self-hosted audiobook store and personal library app.",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "dev:client": "vite --host 0.0.0.0",
+    "desktop": "electron .",
+    "desktop:pack": "electron-builder --win --dir",
+    "desktop:installer": "electron-builder --win",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx src/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.storystack.desktop",
+    "productName": "Story Stack",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.5",
+    "express": "^5.2.1",
+    "lucide-react": "^1.28.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/supertest": "^7.2.1",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.10"
+  }
+}

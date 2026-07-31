@@ -1,0 +1,37 @@
+services:
+  story-stack:
+    build: .
+    container_name: story-stack
+    restart: unless-stopped
+    ports:
+      - "4100:4100"
+    environment:
+      PORT: "4100"
+      HOST: "0.0.0.0"
+      STORY_STACK_DATA_DIR: "/data"
+      STORY_STACK_LIBRARY_PATH: "/srv/media/audiobooks/"
+      STORY_STACK_ABS_DB_PATH: "/abs-config/absdatabase.sqlite"
+      STORY_STACK_ABS_LIBRARY_PATH_PREFIX: "/audiobooks"
+      STORY_STACK_ABS_MEDIA_PATH_PREFIX: "/audiobooks"
+      STORY_STACK_MEDIA_PATH_PREFIX: "/srv/media/audiobooks"
+      STORY_STACK_ABS_METADATA_PATH_PREFIX: "/metadata"
+      STORY_STACK_METADATA_PATH_PREFIX: "/metadata"
+      STORY_STACK_ADMIN_EMAIL: "adam.w.nott@gmail.com"
+      STORY_STACK_ADMIN_PASSWORD: "${STORY_STACK_ADMIN_PASSWORD:-}"
+      STORY_STACK_USER_PASSWORD: "${STORY_STACK_USER_PASSWORD:-}"
+      STORY_STACK_PUBLIC_URL: "${STORY_STACK_PUBLIC_URL:-}"
+    volumes:
+      - /srv/story-stack/data:/data
+      - /srv/media/audiobooks/:/srv/media/audiobooks/:ro
+      - /srv/audiobookshelf/config:/abs-config:ro
+      - /srv/audiobookshelf/metadata:/metadata:ro
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: story-stack-tunnel
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+    depends_on:
+      - story-stack

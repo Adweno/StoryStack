@@ -1,0 +1,206 @@
+import { Check, Download, MoreVertical, Play, Plus, Trash2, Volume2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
+import { createPortal } from "react-dom";
+import { BookCover } from "./BookCover";
+import type { Book, Shelf } from "../types";
+
+export function BookCard({
+  book,
+  inLibrary,
+  onAdd,
+  onMoveToShelf,
+  onOfflineSave,
+  offlineState = "idle",
+  onRemove,
+  onPlay,
+  onSelect,
+  shelves = [],
+  variant = "library"
+}: {
+  book: Book;
+  inLibrary: boolean;
+  onAdd: () => void;
+  onMoveToShelf?: (shelf: Shelf) => void;
+  onOfflineSave?: () => void;
+  offlineState?: "idle" | "saving" | "saved";
+  onRemove: () => void;
+  onPlay: () => void;
+  onSelect: () => void;
+  shelves?: Shelf[];
+  variant?: "library" | "store";
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<MenuPosition>();
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!menuButtonRef.current?.contains(target) && !menuPanelRef.current?.contains(target)) {
+        setMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", closeOnOutsideClick);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      window.removeEventListener("mousedown", closeOnOutsideClick);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [menuOpen]);
+
+  const moveToShelf = (shelf: Shelf) => {
+    onMoveToShelf?.(shelf);
+    setMenuOpen(false);
+  };
+
+  const remove = () => {
+    onRemove();
+    setMenuOpen(false);
+  };
+
+  const toggleMenu = () => {
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    const rect = menuButtonRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    const panelWidth = 218;
+    const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8));
+    const opensBelow = rect.top < 220;
+    setMenuPosition({
+      left,
+      top: opensBelow ? rect.bottom + 8 : rect.top - 8,
+      placement: opensBelow ? "below" : "above"
+    });
+    setMenuOpen(true);
+  };
+
+  const closeMenu = () => setMenuOpen(false);
+
+  return (
+    <article className="book-card">
+      <button className="cover-button" onClick={onSelect} aria-label={`Open ${book.title}`}>
+        <BookCover book={book} />
+      </button>
+      <div className="book-card-body">
+        <button className="plain-title" onClick={onSelect}>
+          {book.title}
+        </button>
+        <p>{book.author}</p>
+        <div className="book-actions">
+          {variant === "library" ? (
+            <button className="icon-button" onClick={onPlay} title="Play">
+              <Play size={17} />
+            </button>
+          ) : (
+            <button className="icon-button" onClick={onSelect} title="Sample">
+              <Volume2 size={17} />
+            </button>
+          )}
+          {variant === "library" && onOfflineSave && (
+            <button
+              className={offlineState === "saved" ? "icon-button saved-offline" : "icon-button"}
+              disabled={offlineState !== "idle"}
+              onClick={onOfflineSave}
+              title={offlineState === "saved" ? "Saved offline" : offlineState === "saving" ? "Saving offline" : "Save offline"}
+            >
+              {offlineState === "saved" ? <Check size={16} /> : <Download size={16} />}
+            </button>
+          )}
+          {!inLibrary && (
+            <button className="icon-button primary" onClick={onAdd} title="Add to Library">
+              <Plus size={16} />
+            </button>
+          )}
+          {inLibrary && (
+            <div className="book-menu">
+              <button
+                ref={menuButtonRef}
+                className="icon-button"
+                onClick={toggleMenu}
+                title="Book options"
+                aria-expanded={menuOpen}
+                aria-label={`Options for ${book.title}`}
+              >
+                <MoreVertical size={16} />
+              </button>
+              {menuOpen &&
+                menuPosition &&
+                createPortal(
+                  <BookMenuPanel
+                    menuPanelRef={menuPanelRef}
+                    moveToShelf={moveToShelf}
+                    position={menuPosition}
+                    remove={remove}
+                    shelves={shelves}
+                  />,
+                  document.body
+                )}
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function BookMenuPanel({
+  menuPanelRef,
+  moveToShelf,
+  position,
+  remove,
+  shelves
+}: {
+  menuPanelRef: RefObject<HTMLDivElement | null>;
+  moveToShelf: (shelf: Shelf) => void;
+  position: MenuPosition;
+  remove: () => void;
+  shelves: Shelf[];
+}) {
+  return (
+    <div
+      className="book-menu-panel floating-book-menu"
+      ref={menuPanelRef}
+      style={{
+        left: position.left,
+        top: position.top,
+        transform: position.placement === "above" ? "translateY(-100%)" : undefined
+      }}
+    >
+      <button onClick={remove}>
+        <Trash2 size={15} />
+        Remove from Library
+      </button>
+      <div className="book-menu-section">
+        <span>Move to shelf</span>
+        {shelves.length > 0 ? (
+          shelves.map((shelf) => (
+            <button key={shelf.id} onClick={() => moveToShelf(shelf)}>
+              {shelf.name}
+            </button>
+          ))
+        ) : (
+          <small>No shelves yet</small>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface MenuPosition {
+  left: number;
+  top: number;
+  placement: "above" | "below";
+}
