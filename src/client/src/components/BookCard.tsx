@@ -1,4 +1,4 @@
-import { Check, Download, MoreVertical, Play, Plus, Trash2, Volume2 } from "lucide-react";
+import { Check, Download, LoaderCircle, MoreVertical, Play, Plus, Trash2, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -111,12 +111,12 @@ export function BookCard({
           )}
           {variant === "library" && onOfflineSave && (
             <button
-              className={offlineState === "saved" ? "icon-button saved-offline" : "icon-button"}
+              className={offlineState === "saved" ? "icon-button saved-offline" : offlineState === "saving" ? "icon-button saving-offline" : "icon-button"}
               disabled={offlineState !== "idle"}
               onClick={onOfflineSave}
               title={offlineState === "saved" ? "Saved offline" : offlineState === "saving" ? "Saving offline" : "Save offline"}
             >
-              {offlineState === "saved" ? <Check size={16} /> : <Download size={16} />}
+              {offlineState === "saved" ? <Check size={16} /> : offlineState === "saving" ? <LoaderCircle size={16} /> : <Download size={16} />}
             </button>
           )}
           {!inLibrary && (

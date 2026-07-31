@@ -824,6 +824,12 @@ h1 {
   color: #fffaf2;
 }
 
+.light-theme:not(.store-space) .icon-button.saving-offline {
+  background: #fff3da;
+  border-color: #d5b678;
+  color: #7b5719;
+}
+
 .light-theme:not(.store-space) .star-rating-input,
 .light-theme:not(.store-space) .star-rating-display,
 .light-theme:not(.store-space) .book-rating-badge {
@@ -1648,6 +1654,22 @@ h1 {
   background: #506742;
   border-color: #506742;
   color: #fff7df;
+}
+
+.icon-button.saving-offline {
+  background: #3a3021;
+  border-color: #7e6844;
+  color: #ffd38d;
+}
+
+.icon-button.saving-offline svg {
+  animation: story-stack-spin 900ms linear infinite;
+}
+
+@keyframes story-stack-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .book-detail-page {
