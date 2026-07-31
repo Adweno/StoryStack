@@ -106,6 +106,7 @@ export function App() {
     setSelectedBookReviews(undefined);
     setReviewMessage("");
     setView(nextView);
+    scrollToPageTop();
   };
   const [catalogMessage, setCatalogMessage] = useState("");
   const [plexSettings, setPlexSettings] = useState<PlexSettings>({ serverUrl: "", sectionKey: "" });
@@ -139,6 +140,10 @@ export function App() {
       ? `${selectedShelfBooks.length} books`
       : viewSubtitle(space, view, storeBooks.length, libraryBooks.length);
   const shellClassName = `${space === "store" ? "app-shell store-space" : "app-shell"} ${user?.theme === "light" ? "light-theme" : ""}`.trim();
+
+  useEffect(() => {
+    scrollToPageTop();
+  }, [selectedBook?.id, selectedShelf?.id, space, view]);
 
   useEffect(() => {
     void refresh().finally(() => setAuthChecked(true));
@@ -2535,4 +2540,11 @@ function readLastUser(): User | undefined {
   } catch {
     return undefined;
   }
+}
+
+function scrollToPageTop(): void {
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, left: 0 });
+    document.querySelector(".workspace")?.scrollTo({ top: 0, left: 0 });
+  });
 }
