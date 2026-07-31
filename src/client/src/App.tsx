@@ -1221,11 +1221,11 @@ function BookDetailPage({
   reviews?: BookReviewResponse;
   source: Space;
 }) {
-  const [rating, setRating] = useState(reviews?.myReview?.rating ?? 5);
+  const [rating, setRating] = useState<number | undefined>(reviews?.myReview?.rating);
   const [reviewText, setReviewText] = useState(reviews?.myReview?.review ?? "");
 
   useEffect(() => {
-    setRating(reviews?.myReview?.rating ?? 5);
+    setRating(reviews?.myReview?.rating);
     setReviewText(reviews?.myReview?.review ?? "");
   }, [book.id, reviews?.myReview?.rating, reviews?.myReview?.review]);
 
@@ -1303,13 +1303,16 @@ function BookDetailPage({
                 className="review-form"
                 onSubmit={(event) => {
                   event.preventDefault();
+                  if (!rating) return;
                   onSaveReview(rating, reviewText);
                 }}
               >
                 <StarRatingInput value={rating} onChange={setRating} />
                 <textarea value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Share what you thought about this book" rows={4} />
                 <div className="review-form-actions">
-                  <button className="primary command-button">{reviews?.myReview ? "Update Review" : "Save Review"}</button>
+                  <button className="primary command-button" disabled={!rating}>
+                    {reviews?.myReview ? "Update Review" : "Save Review"}
+                  </button>
                   {reviews?.myReview && (
                     <button className="command-button danger" onClick={onDeleteReview} type="button">
                       Remove Review
@@ -1339,13 +1342,13 @@ function BookDetailPage({
   );
 }
 
-function StarRatingInput({ value, onChange }: { value: number; onChange: (rating: number) => void }) {
+function StarRatingInput({ value, onChange }: { value?: number; onChange: (rating: number) => void }) {
   return (
     <div className="star-rating-input" aria-label="Rating">
       {[1, 2, 3, 4, 5].map((star) => (
         <button
           aria-label={`${star} star${star === 1 ? "" : "s"}`}
-          className={star <= value ? "active" : ""}
+          className={value && star <= value ? "active" : ""}
           key={star}
           onClick={() => onChange(star)}
           type="button"
