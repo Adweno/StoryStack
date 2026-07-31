@@ -98,6 +98,13 @@ export function App() {
   const [metadataMessage, setMetadataMessage] = useState("");
   const [catalogPath, setCatalogPath] = useState("");
   const [catalogResult, setCatalogResult] = useState<SyncResult>();
+
+  const navigateToView = (nextView: View) => {
+    setSelectedBook(undefined);
+    setSelectedBookReviews(undefined);
+    setReviewMessage("");
+    setView(nextView);
+  };
   const [catalogMessage, setCatalogMessage] = useState("");
   const [plexSettings, setPlexSettings] = useState<PlexSettings>({ serverUrl: "", sectionKey: "" });
   const [plexSections, setPlexSections] = useState<PlexLibrarySection[]>([]);
@@ -683,11 +690,11 @@ export function App() {
               onClick={() => {
                 if (space === "store") {
                   setSpace("library");
-                  setView("home");
+                  navigateToView("home");
                   setLibraryCategoryKey(undefined);
                 } else {
                   setSpace("store");
-                  setView("home");
+                  navigateToView("home");
                   setStoreBrowseMode("title");
                   setStoreCategoryKey(undefined);
                 }
@@ -698,7 +705,7 @@ export function App() {
             </button>
           )}
           {space === "store" && user?.role === "admin" && (
-            <button className={view === "admin" ? "settings-button active" : "settings-button"} onClick={() => setView("admin")}>
+            <button className={view === "admin" ? "settings-button active" : "settings-button"} onClick={() => navigateToView("admin")}>
               <Settings size={18} />
               Settings
             </button>
@@ -753,20 +760,20 @@ export function App() {
       <aside className="sidebar">
         <nav>
           {offlineOnly ? (
-            <button className="active" onClick={() => setView("downloads")}>
+            <button className="active" onClick={() => navigateToView("downloads")}>
               <Download size={18} />
               Downloads
             </button>
           ) : (
             <>
-              <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>
+              <button className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>
                 <Home size={18} />
                 Home
               </button>
               <button
                 className={view === "library" ? "active" : ""}
                 onClick={() => {
-                  setView("library");
+                  navigateToView("library");
                   if (space === "store") {
                     setStoreBrowseMode("title");
                     setStoreCategoryKey(undefined);
@@ -779,7 +786,7 @@ export function App() {
               <button
                 className={view === "series" ? "active" : ""}
                 onClick={() => {
-                  setView("series");
+                  navigateToView("series");
                   if (space === "store") {
                     setStoreBrowseMode("series");
                     setStoreCategoryKey(undefined);
@@ -792,7 +799,7 @@ export function App() {
               <button
                 className={view === "authors" ? "active" : ""}
                 onClick={() => {
-                  setView("authors");
+                  navigateToView("authors");
                   if (space === "store") {
                     setStoreBrowseMode("author");
                     setStoreCategoryKey(undefined);
@@ -805,7 +812,7 @@ export function App() {
               <button
                 className={view === "genres" ? "active" : ""}
                 onClick={() => {
-                  setView("genres");
+                  navigateToView("genres");
                   if (space === "store") {
                     setStoreBrowseMode("genre");
                     setStoreCategoryKey(undefined);
@@ -817,11 +824,11 @@ export function App() {
               </button>
               {space === "library" && (
                 <>
-              <button className={view === "shelves" ? "active" : ""} onClick={() => setView("shelves")}>
+              <button className={view === "shelves" ? "active" : ""} onClick={() => navigateToView("shelves")}>
                 <BookMarked size={18} />
                 Shelves
               </button>
-              <button className={view === "downloads" ? "active" : ""} onClick={() => setView("downloads")}>
+              <button className={view === "downloads" ? "active" : ""} onClick={() => navigateToView("downloads")}>
                 <Download size={18} />
                 Downloads
               </button>
