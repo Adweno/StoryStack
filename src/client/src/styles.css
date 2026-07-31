@@ -1435,7 +1435,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  color: #211d18;
+  color: #81786b;
 }
 
 .star-rating-input button {
@@ -1445,12 +1445,14 @@ h1 {
   font-size: 25px;
   line-height: 1;
   padding: 0 1px;
+  text-shadow: 0 0 1px #f3f0e8;
 }
 
 .star-rating-input button.active,
 .star-rating-input button:hover,
 .star-rating-display span.active {
   color: #f6c36a;
+  text-shadow: none;
 }
 
 .star-rating-display {
