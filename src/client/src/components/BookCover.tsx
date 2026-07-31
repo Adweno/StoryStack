@@ -6,7 +6,14 @@ export function BookCover({ book, compact = false }: { book: Book; compact?: boo
   const [failed, setFailed] = useState(false);
 
   if (book.coverPath && !failed) {
-    return <img className="book-cover" src={`/media/books/${book.id}/cover`} alt="" onError={() => setFailed(true)} />;
+    const coverUrl = `/media/books/${book.id}/cover`;
+
+    return (
+      <span className="book-cover cover-art-frame">
+        <img className="cover-art-fill" src={coverUrl} alt="" aria-hidden="true" />
+        <img className="cover-art-image" src={coverUrl} alt="" onError={() => setFailed(true)} />
+      </span>
+    );
   }
 
   return (
