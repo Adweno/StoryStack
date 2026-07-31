@@ -59,6 +59,8 @@ export interface User {
   lastLoginAt?: string;
   passwordConfigured?: boolean;
   passwordResetRequired?: boolean;
+  theme: "dark" | "light";
+  reviewsEnabled: boolean;
 }
 
 export interface UserInvite {

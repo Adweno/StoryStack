@@ -60,6 +60,8 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement>(null);
+  const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  const userSettingsMenuRef = useRef<HTMLDivElement>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent>();
   const [offlineOnly, setOfflineOnly] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -116,6 +118,7 @@ export function App() {
   const [newUserRole, setNewUserRole] = useState<"admin" | "user">("user");
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
   const [userMessage, setUserMessage] = useState("");
+  const [userSettingsMessage, setUserSettingsMessage] = useState("");
 
   const libraryIds = useMemo(() => new Set(libraryBooks.map((book) => book.id)), [libraryBooks]);
   const downloadedBookSource = useMemo(() => {
@@ -135,6 +138,7 @@ export function App() {
     selectedShelf && space === "library" && view === "shelves"
       ? `${selectedShelfBooks.length} books`
       : viewSubtitle(space, view, storeBooks.length, libraryBooks.length);
+  const shellClassName = `${space === "store" ? "app-shell store-space" : "app-shell"} ${user?.theme === "light" ? "light-theme" : ""}`.trim();
 
   useEffect(() => {
     void refresh().finally(() => setAuthChecked(true));
@@ -165,17 +169,20 @@ export function App() {
   }, [api, offlineOnly, query, user]);
 
   useEffect(() => {
-    if (!accountOpen) {
+    if (!accountOpen && !userSettingsOpen) {
       return;
     }
     const closeOnOutsideClick = (event: MouseEvent) => {
       if (!accountMenuRef.current?.contains(event.target as Node)) {
         setAccountOpen(false);
       }
+      if (!userSettingsMenuRef.current?.contains(event.target as Node)) {
+        setUserSettingsOpen(false);
+      }
     };
     window.addEventListener("mousedown", closeOnOutsideClick);
     return () => window.removeEventListener("mousedown", closeOnOutsideClick);
-  }, [accountOpen]);
+  }, [accountOpen, userSettingsOpen]);
 
   useEffect(() => {
     if (space !== "store" || view !== "admin" || user?.role !== "admin") {
@@ -224,7 +231,7 @@ export function App() {
       const cachedBooks = await offlineCache.listBooks();
       if (cachedBooks.length > 0) {
         setOfflineOnly(true);
-        setUser(readLastUser() ?? { id: "offline", name: "Offline", role: "user", status: "active" });
+        setUser(readLastUser() ?? { id: "offline", name: "Offline", role: "user", status: "active", theme: "dark", reviewsEnabled: true });
         setStoreBooks([]);
         setLibraryBooks([]);
         setCachedOfflineBooks(cachedBooks);
@@ -290,6 +297,19 @@ export function App() {
       setPasswordMessage("Password saved.");
     } catch (error) {
       setPasswordMessage(error instanceof Error ? error.message : "Password could not be saved.");
+    }
+  };
+
+  const updateUserPreferences = async (input: { theme: "dark" | "light"; reviewsEnabled: boolean }) => {
+    if (!user) {
+      return;
+    }
+    setUserSettingsMessage("");
+    try {
+      setUser(await api.updatePreferences(input));
+      setUserSettingsMessage("Settings saved.");
+    } catch (error) {
+      setUserSettingsMessage(error instanceof Error ? error.message : "Settings could not be saved.");
     }
   };
 
@@ -663,7 +683,7 @@ export function App() {
   }
 
   return (
-    <main className={space === "store" ? "app-shell store-space" : "app-shell"}>
+    <main className={shellClassName}>
       <header className="app-topbar">
         <div className="app-brand">
           <img className="brand-logo" src={storyStackLogo} alt="" />
@@ -673,17 +693,17 @@ export function App() {
           <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
+        {installPrompt && (
+          <button className="install-button" onClick={() => void installApp()}>
+            <Download size={18} />
+            Install App
+          </button>
+        )}
         <label className="search-box topbar-search">
           <Search size={18} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search books, authors, narrators" />
         </label>
         <div className="topbar-actions">
-          {installPrompt && (
-            <button className="install-button" onClick={() => void installApp()}>
-              <Download size={18} />
-              Install App
-            </button>
-          )}
           {!offlineOnly && (
             <button
               className={space === "store" ? "store-button active" : "store-button"}
@@ -713,7 +733,10 @@ export function App() {
           <div className="account-menu" ref={accountMenuRef}>
             <button
               className="account-button"
-              onClick={() => setAccountOpen((open) => !open)}
+              onClick={() => {
+                setAccountOpen((open) => !open);
+                setUserSettingsOpen(false);
+              }}
               aria-expanded={accountOpen}
               aria-label="Open account menu"
             >
@@ -751,10 +774,54 @@ export function App() {
                 </form>
                 <button className="command-button account-signout" onClick={() => void logout()}>
                   Sign Out
-                </button>
-              </section>
-            )}
-          </div>
+              </button>
+            </section>
+          )}
+        </div>
+          {space === "library" && (
+            <div className="user-settings-menu" ref={userSettingsMenuRef}>
+              <button
+                className="user-settings-button"
+                onClick={() => {
+                  setUserSettingsOpen((open) => !open);
+                  setAccountOpen(false);
+                }}
+                aria-expanded={userSettingsOpen}
+                aria-label="Open library settings"
+              >
+                <Settings size={18} />
+              </button>
+              {userSettingsOpen && (
+                <section className="user-settings-panel">
+                  <div className="settings-panel-title">
+                    <strong>Library Settings</strong>
+                    <span>{user.name}</span>
+                  </div>
+                  <label className="settings-row-control">
+                    <span>Theme</span>
+                    <select
+                      value={user.theme}
+                      onChange={(event) =>
+                        void updateUserPreferences({ theme: event.target.value as "dark" | "light", reviewsEnabled: user.reviewsEnabled })
+                      }
+                    >
+                      <option value="dark">Dark</option>
+                      <option value="light">Light</option>
+                    </select>
+                  </label>
+                  <label className="settings-toggle-row">
+                    <span>Turn on User reviews</span>
+                    <input
+                      checked={user.reviewsEnabled}
+                      onChange={(event) => void updateUserPreferences({ theme: user.theme, reviewsEnabled: event.target.checked })}
+                      type="checkbox"
+                    />
+                  </label>
+                  {userSettingsMessage && <span className="settings-save-message">{userSettingsMessage}</span>}
+                </section>
+              )}
+            </div>
+          )}
         </div>
       </header>
       <aside className="sidebar">
@@ -851,6 +918,7 @@ export function App() {
             onDeleteReview={() => void deleteBookReview(selectedBook)}
             onSaveReview={(rating, review) => saveBookReview(selectedBook, rating, review)}
             reviewMessage={reviewMessage}
+            reviewsEnabled={user.reviewsEnabled}
             reviews={selectedBookReviews}
             source={selectedBookSpace}
           />
@@ -1213,6 +1281,7 @@ function BookDetailPage({
   onDeleteReview,
   onSaveReview,
   reviewMessage,
+  reviewsEnabled,
   reviews,
   source
 }: {
@@ -1225,6 +1294,7 @@ function BookDetailPage({
   onDeleteReview: () => void;
   onSaveReview: (rating: number, review: string) => Promise<void>;
   reviewMessage: string;
+  reviewsEnabled: boolean;
   reviews?: BookReviewResponse;
   source: Space;
 }) {
@@ -1298,6 +1368,7 @@ function BookDetailPage({
             <h3>Description</h3>
             <p>{book.description ?? "No description imported yet."}</p>
           </section>
+          {reviewsEnabled && (
           <section className="book-review-section">
             <div className="book-review-heading">
               <h3>Reviews</h3>
@@ -1345,6 +1416,7 @@ function BookDetailPage({
               {reviews && reviews.reviews.length === 0 && <p className="review-empty">Be the first to rate this book.</p>}
             </div>
           </section>
+          )}
         </div>
       </div>
     </section>
@@ -2455,7 +2527,11 @@ function readLastUser(): User | undefined {
     if (typeof user.id !== "string" || typeof user.name !== "string" || (user.role !== "admin" && user.role !== "user")) {
       return undefined;
     }
-    return user as User;
+    return {
+      ...user,
+      theme: user.theme === "light" ? "light" : "dark",
+      reviewsEnabled: user.reviewsEnabled !== false
+    } as User;
   } catch {
     return undefined;
   }

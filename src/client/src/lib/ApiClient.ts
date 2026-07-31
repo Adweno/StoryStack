@@ -42,6 +42,14 @@ export class ApiClient {
     return data.user;
   }
 
+  async updatePreferences(input: { theme: "dark" | "light"; reviewsEnabled: boolean }): Promise<User> {
+    const data = await this.request<{ user: User }>("/api/me/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    });
+    return data.user;
+  }
+
   async store(query = ""): Promise<Book[]> {
     const data = await this.get<{ books: Book[] }>(`/api/store?q=${encodeURIComponent(query)}`);
     return data.books;

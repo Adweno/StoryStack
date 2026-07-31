@@ -50,6 +50,10 @@ const passwordChangeSchema = z.object({
   currentPassword: z.string().optional(),
   newPassword: z.string().min(8)
 });
+const userPreferencesSchema = z.object({
+  theme: z.enum(["dark", "light"]),
+  reviewsEnabled: z.boolean()
+});
 const adminPasswordResetSchema = z.object({
   newPassword: z.string().min(8)
 });
@@ -166,6 +170,16 @@ export class AppServer {
       } catch (error) {
         response.status(401).json({ error: error instanceof Error ? error.message : "Password could not be changed." });
       }
+    });
+
+    this.app.patch("/api/me/preferences", (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const parsed = userPreferencesSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return response.status(400).json({ error: "Choose a valid theme and review setting." });
+      }
+      response.json({ user: this.context.database.updateUserPreferences(user.id, parsed.data) });
     });
 
     this.app.get("/api/store", (request, response) => {

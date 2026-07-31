@@ -1,4 +1,5 @@
 export type UserRole = "admin" | "user";
+export type UserTheme = "dark" | "light";
 export type ListeningStatus = "not_started" | "in_progress" | "finished";
 
 export interface User {
@@ -12,6 +13,8 @@ export interface User {
   lastLoginAt?: string;
   passwordConfigured?: boolean;
   passwordResetRequired?: boolean;
+  theme: UserTheme;
+  reviewsEnabled: boolean;
 }
 
 export type UserStatus = "active" | "disabled";

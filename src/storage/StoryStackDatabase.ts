@@ -16,7 +16,8 @@ import type {
   UserInvite,
   UserLibraryBook,
   UserRole,
-  UserStatus
+  UserStatus,
+  UserTheme
 } from "../domain/types";
 import type { LibraryRepository } from "../services/LibraryService";
 import { PasswordHasher } from "../services/PasswordHasher";
@@ -34,7 +35,9 @@ export class StoryStackDatabase implements LibraryRepository {
 
   listUsers(): User[] {
     return (this.database
-      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired FROM users ORDER BY name")
+      .prepare(
+        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users ORDER BY name"
+      )
       .all() as unknown as UserRow[]).map((row) => this.toUser(row));
   }
 
@@ -144,13 +147,24 @@ export class StoryStackDatabase implements LibraryRepository {
     return user;
   }
 
+  updateUserPreferences(userId: string, input: { theme: UserTheme; reviewsEnabled: boolean }): User {
+    this.database.prepare("UPDATE users SET theme = ?, reviewsEnabled = ? WHERE id = ?").run(input.theme, input.reviewsEnabled ? 1 : 0, userId);
+    const user = this.getUserById(userId);
+    if (!user) {
+      throw new Error("User was not found.");
+    }
+    return user;
+  }
+
   deleteUser(userId: string): void {
     this.database.prepare("DELETE FROM users WHERE id = ?").run(userId);
   }
 
   getDefaultUser(): User {
     const row = this.database
-      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired FROM users ORDER BY role LIMIT 1")
+      .prepare(
+        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users ORDER BY role LIMIT 1"
+      )
       .get() as UserRow | undefined;
     if (!row) {
       throw new Error("Default user was not created.");
@@ -160,14 +174,18 @@ export class StoryStackDatabase implements LibraryRepository {
 
   getUserById(userId: string): User | undefined {
     const row = this.database
-      .prepare("SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired FROM users WHERE id = ?")
+      .prepare(
+        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users WHERE id = ?"
+      )
       .get(userId) as UserRow | undefined;
     return row ? this.toUser(row) : undefined;
   }
 
   getUserCredentials(username: string): UserCredentials | undefined {
     return this.database
-      .prepare("SELECT id, name, role, status, username, email, passwordHash, passwordResetRequired FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)")
+      .prepare(
+        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)"
+      )
       .get(username, username) as UserCredentials | undefined;
   }
 
@@ -206,7 +224,7 @@ export class StoryStackDatabase implements LibraryRepository {
   getSessionUser(token: string, now = new Date().toISOString()): User | undefined {
     const row = this.database
       .prepare(
-        `SELECT u.id, u.name, u.role, u.status, u.username, u.email, u.plexId, u.lastLoginAt, u.passwordHash, u.passwordResetRequired
+        `SELECT u.id, u.name, u.role, u.status, u.username, u.email, u.plexId, u.lastLoginAt, u.passwordHash, u.passwordResetRequired, u.theme, u.reviewsEnabled
          FROM user_sessions s
          JOIN users u ON u.id = s.userId
          WHERE s.token = ? AND s.expiresAt > ? AND COALESCE(u.status, 'active') = 'active'`
@@ -584,7 +602,9 @@ export class StoryStackDatabase implements LibraryRepository {
         email TEXT,
         plexId TEXT,
         lastLoginAt TEXT,
-        plexToken TEXT
+        plexToken TEXT,
+        theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light')),
+        reviewsEnabled INTEGER NOT NULL DEFAULT 1
       );
 
       CREATE TABLE IF NOT EXISTS user_invites (
@@ -705,6 +725,8 @@ export class StoryStackDatabase implements LibraryRepository {
     this.addColumnIfMissing("users", "plexToken", "TEXT");
     this.addColumnIfMissing("users", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.addColumnIfMissing("users", "lastLoginAt", "TEXT");
+    this.addColumnIfMissing("users", "theme", "TEXT NOT NULL DEFAULT 'dark'");
+    this.addColumnIfMissing("users", "reviewsEnabled", "INTEGER NOT NULL DEFAULT 1");
     this.addColumnIfMissing("books", "plexKey", "TEXT");
     this.addColumnIfMissing("books", "plexPartKey", "TEXT");
     this.addColumnIfMissing("books", "plexFile", "TEXT");
@@ -832,7 +854,9 @@ export class StoryStackDatabase implements LibraryRepository {
       plexId: row.plexId ?? undefined,
       lastLoginAt: row.lastLoginAt ?? undefined,
       passwordConfigured: Boolean(row.passwordHash),
-      passwordResetRequired: Boolean(row.passwordResetRequired)
+      passwordResetRequired: Boolean(row.passwordResetRequired),
+      theme: row.theme ?? "dark",
+      reviewsEnabled: row.reviewsEnabled === undefined ? true : Boolean(row.reviewsEnabled)
     };
   }
 
@@ -932,6 +956,8 @@ interface UserRow {
   lastLoginAt: string | null;
   passwordHash: string | null;
   passwordResetRequired: number;
+  theme: UserTheme;
+  reviewsEnabled: number;
 }
 
 export interface BookUpsertResult {

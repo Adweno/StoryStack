@@ -51,6 +51,26 @@ describe("AppServer", () => {
     await request(app).post("/api/auth/login").send({ username: "reader@example.com", password: "second secure password" }).expect(200);
   });
 
+  it("lets signed-in users manage personal display preferences", async () => {
+    const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
+    const context = new AppContext({ databasePath });
+    const app = new AppServer(context).app;
+    const loginResponse = await request(app).post("/api/auth/login").send({ username: "admin", password: "admin" }).expect(200);
+    const cookie = loginResponse.headers["set-cookie"];
+
+    expect(loginResponse.body.user).toMatchObject({ theme: "dark", reviewsEnabled: true });
+
+    const updated = await request(app)
+      .patch("/api/me/preferences")
+      .set("Cookie", cookie)
+      .send({ theme: "light", reviewsEnabled: false })
+      .expect(200);
+
+    expect(updated.body.user).toMatchObject({ theme: "light", reviewsEnabled: false });
+    const current = await request(app).get("/api/me").set("Cookie", cookie).expect(200);
+    expect(current.body).toMatchObject({ theme: "light", reviewsEnabled: false });
+  });
+
   it("creates and accepts a Story Stack invite without Plex", async () => {
     const databasePath = path.join(os.tmpdir(), `story-stack-api-${crypto.randomUUID()}.sqlite`);
     const context = new AppContext({ databasePath });

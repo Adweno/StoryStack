@@ -339,6 +339,10 @@ h1 {
   position: relative;
 }
 
+.user-settings-menu {
+  position: relative;
+}
+
 .account-button {
   border: 1px solid #4a4035;
   background: #24211d;
@@ -353,17 +357,31 @@ h1 {
   white-space: nowrap;
 }
 
-.account-button:hover {
+.user-settings-button {
+  border: 1px solid #4a4035;
+  background: #24211d;
+  color: #f3f0e8;
+  border-radius: 7px;
+  min-width: 42px;
+  min-height: 42px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.account-button:hover,
+.user-settings-button:hover {
   border-color: #7e6844;
   background: #2d2924;
 }
 
-.store-space .account-button {
+.store-space .account-button,
+.store-space .user-settings-button {
   background: #231c24;
   border-color: #604154;
 }
 
-.account-panel {
+.account-panel,
+.user-settings-panel {
   position: absolute;
   right: 0;
   top: calc(100% + 10px);
@@ -378,9 +396,49 @@ h1 {
   z-index: 80;
 }
 
-.store-space .account-panel {
+.user-settings-panel {
+  display: grid;
+  gap: 13px;
+}
+
+.store-space .account-panel,
+.store-space .user-settings-panel {
   background: #231c24;
   border-color: #604154;
+}
+
+.settings-panel-title,
+.settings-row-control,
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.settings-panel-title {
+  align-items: flex-start;
+}
+
+.settings-panel-title span,
+.settings-save-message {
+  color: #b6aa96;
+  font-size: 13px;
+}
+
+.settings-row-control select {
+  border: 1px solid #4a4035;
+  background: #151410;
+  color: #f3f0e8;
+  border-radius: 7px;
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+.settings-toggle-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: #7f4a55;
 }
 
 .account-panel-header {
@@ -548,6 +606,78 @@ h1 {
   background: #5a3347;
   border-color: #9d6575;
   color: #fff7df;
+}
+
+.light-theme:not(.store-space) {
+  background: #f4efe6;
+  color: #201b16;
+}
+
+.light-theme:not(.store-space) .app-topbar,
+.light-theme:not(.store-space) .sidebar {
+  background: #fbf7ee;
+  border-color: #dfd3c2;
+  color: #2a241d;
+  box-shadow: 0 10px 28px rgb(88 65 39 / 12%);
+}
+
+.light-theme:not(.store-space) .workspace {
+  background: #f4efe6;
+}
+
+.light-theme:not(.store-space) h1,
+.light-theme:not(.store-space) h2,
+.light-theme:not(.store-space) h3,
+.light-theme:not(.store-space) .book-card strong,
+.light-theme:not(.store-space) .category-card strong,
+.light-theme:not(.store-space) .account-details dd,
+.light-theme:not(.store-space) .account-password-form strong,
+.light-theme:not(.store-space) .book-detail-meta dd {
+  color: #201b16;
+}
+
+.light-theme:not(.store-space) .app-title p,
+.light-theme:not(.store-space) .book-card p,
+.light-theme:not(.store-space) .byline,
+.light-theme:not(.store-space) .book-detail-heading p,
+.light-theme:not(.store-space) .book-detail-description p,
+.light-theme:not(.store-space) .review-card span,
+.light-theme:not(.store-space) .review-card p,
+.light-theme:not(.store-space) .review-empty {
+  color: #665b4e;
+}
+
+.light-theme:not(.store-space) .book-card,
+.light-theme:not(.store-space) .category-card,
+.light-theme:not(.store-space) .empty-dashboard,
+.light-theme:not(.store-space) .account-panel,
+.light-theme:not(.store-space) .user-settings-panel,
+.light-theme:not(.store-space) .book-detail-meta div,
+.light-theme:not(.store-space) .review-form,
+.light-theme:not(.store-space) .review-card,
+.light-theme:not(.store-space) .search-box,
+.light-theme:not(.store-space) .account-button,
+.light-theme:not(.store-space) .user-settings-button {
+  background: #fffaf2;
+  border-color: #d9cbb8;
+  color: #201b16;
+}
+
+.light-theme:not(.store-space) input,
+.light-theme:not(.store-space) select,
+.light-theme:not(.store-space) textarea,
+.light-theme:not(.store-space) .settings-row-control select,
+.light-theme:not(.store-space) .account-password-form input,
+.light-theme:not(.store-space) .review-form textarea {
+  background: #fffdf8;
+  border-color: #cdbda7;
+  color: #201b16;
+}
+
+.light-theme:not(.store-space) nav button.active,
+.light-theme:not(.store-space) nav button:hover {
+  background: #dfe9df;
+  color: #201b16;
 }
 
 .search-box input,
@@ -2018,19 +2148,23 @@ audio {
   .store-button,
   .install-button,
   .settings-button,
-  .account-button {
+  .account-button,
+  .user-settings-button {
     flex: 1 1 auto;
   }
 
-  .account-menu {
+  .account-menu,
+  .user-settings-menu {
     flex: 1 1 auto;
   }
 
-  .account-button {
+  .account-button,
+  .user-settings-button {
     width: 100%;
   }
 
-  .account-panel {
+  .account-panel,
+  .user-settings-panel {
     right: 0;
     width: min(280px, calc(100vw - 24px));
   }

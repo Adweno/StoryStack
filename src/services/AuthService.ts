@@ -24,7 +24,9 @@ export class AuthService {
       username: credentials.username,
       email: credentials.email,
       passwordConfigured: Boolean(credentials.passwordHash),
-      passwordResetRequired: Boolean(credentials.passwordResetRequired)
+      passwordResetRequired: Boolean(credentials.passwordResetRequired),
+      theme: credentials.theme,
+      reviewsEnabled: Boolean(credentials.reviewsEnabled)
     });
   }
 
