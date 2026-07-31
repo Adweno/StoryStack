@@ -686,14 +686,6 @@ export function App() {
                     <dt>Role</dt>
                     <dd>{user.role === "admin" ? "Admin" : "User"}</dd>
                   </div>
-                  <div>
-                    <dt>Sign in</dt>
-                    <dd>{user.plexId ? "Plex" : "Story Stack"}</dd>
-                  </div>
-                  <div>
-                    <dt>Password</dt>
-                    <dd>{user.passwordResetRequired ? "Change required" : user.passwordConfigured ? "Set" : "Not set"}</dd>
-                  </div>
                 </dl>
                 <form className="account-password-form" onSubmit={changeOwnPassword}>
                   <strong>{user.passwordResetRequired ? "Choose New Password" : user.passwordConfigured ? "Change Password" : "Set Password"}</strong>
