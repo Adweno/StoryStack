@@ -311,7 +311,9 @@ export function App() {
     }
     setUserSettingsMessage("");
     try {
-      setUser(await api.updatePreferences(input));
+      const updatedUser = await api.updatePreferences(input);
+      window.localStorage.setItem(LAST_USER_KEY, JSON.stringify(updatedUser));
+      setUser(updatedUser);
       setUserSettingsMessage("Settings saved.");
     } catch (error) {
       setUserSettingsMessage(error instanceof Error ? error.message : "Settings could not be saved.");

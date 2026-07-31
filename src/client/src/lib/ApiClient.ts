@@ -45,6 +45,7 @@ export class ApiClient {
   async updatePreferences(input: { theme: "dark" | "light"; reviewsEnabled: boolean }): Promise<User> {
     const data = await this.request<{ user: User }>("/api/me/preferences", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input)
     });
     return data.user;
