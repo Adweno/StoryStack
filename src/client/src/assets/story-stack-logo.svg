@@ -1,0 +1,46 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Story Stack logo</title>
+  <defs>
+    <linearGradient id="badge" x1="72" y1="64" x2="452" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#231528"/>
+      <stop offset="0.52" stop-color="#14302E"/>
+      <stop offset="1" stop-color="#0B1414"/>
+    </linearGradient>
+    <linearGradient id="amberRose" x1="141" y1="112" x2="368" y2="393" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFC769"/>
+      <stop offset="1" stop-color="#B25A69"/>
+    </linearGradient>
+    <linearGradient id="tealPage" x1="175" y1="141" x2="347" y2="352" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF7D8"/>
+      <stop offset="1" stop-color="#D7C09B"/>
+    </linearGradient>
+    <filter id="shadow" x="70" y="84" width="370" height="336" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="20" stdDeviation="16" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <rect x="36" y="36" width="440" height="440" rx="106" fill="url(#badge)"/>
+  <rect x="50" y="50" width="412" height="412" rx="94" stroke="#FFC769" stroke-opacity="0.74" stroke-width="18"/>
+
+  <g filter="url(#shadow)">
+    <path d="M151 153C151 130.909 168.909 113 191 113H329C351.091 113 369 130.909 369 153V176H151V153Z" fill="url(#amberRose)"/>
+    <path d="M151 176H369V253H151V176Z" fill="#FFF7D8"/>
+    <path d="M151 253H369V329C369 351.091 351.091 369 329 369H191C168.909 369 151 351.091 151 329V253Z" fill="url(#amberRose)"/>
+
+    <path d="M184 188H336" stroke="#14302E" stroke-opacity="0.48" stroke-width="18" stroke-linecap="round"/>
+    <path d="M184 229H306" stroke="#14302E" stroke-opacity="0.36" stroke-width="18" stroke-linecap="round"/>
+    <path d="M184 270H336" stroke="#FFF7D8" stroke-opacity="0.88" stroke-width="18" stroke-linecap="round"/>
+    <path d="M184 311H292" stroke="#FFF7D8" stroke-opacity="0.72" stroke-width="18" stroke-linecap="round"/>
+
+    <path d="M129 201C129 184.984 141.984 172 158 172H181V340H158C141.984 340 129 327.016 129 311V201Z" fill="#1F5B55"/>
+    <path d="M339 172H362C378.016 172 391 184.984 391 201V311C391 327.016 378.016 340 362 340H339V172Z" fill="#1F5B55"/>
+    <path d="M191 113H218V369H191C168.909 369 151 351.091 151 329V153C151 130.909 168.909 113 191 113Z" fill="#8F4E62"/>
+    <path d="M302 113H329C351.091 113 369 130.909 369 153V329C369 351.091 351.091 369 329 369H302V113Z" fill="#8F4E62"/>
+
+    <path d="M151 176H369" stroke="#14302E" stroke-opacity="0.28" stroke-width="10"/>
+    <path d="M151 253H369" stroke="#14302E" stroke-opacity="0.28" stroke-width="10"/>
+
+    <path d="M398 135L407.714 155.286L428 165L407.714 174.714L398 195L388.286 174.714L368 165L388.286 155.286L398 135Z" fill="#FFC769"/>
+    <path d="M111 321L117.629 334.371L131 341L117.629 347.629L111 361L104.371 347.629L91 341L104.371 334.371L111 321Z" fill="#FFF7D8"/>
+  </g>
+</svg>

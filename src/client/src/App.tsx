@@ -25,6 +25,7 @@ import { BookBrowser, type BookBrowseMode } from "./lib/BookBrowser";
 import { LibraryAddPlanner } from "./lib/LibraryAddPlanner";
 import { LibraryRemovePlanner } from "./lib/LibraryRemovePlanner";
 import { OfflineBookCache } from "./lib/OfflineBookCache";
+import storyStackLogo from "./assets/story-stack-logo.svg";
 import type {
   Book,
   MetadataEnrichmentResult,
@@ -486,7 +487,7 @@ export function App() {
     <main className={space === "store" ? "app-shell store-space" : "app-shell"}>
       <header className="app-topbar">
         <div className="app-brand">
-          {space === "store" ? <Store size={27} /> : <BookMarked size={27} />}
+          <img className="brand-logo" src={storyStackLogo} alt="" />
           <span>Story Stack</span>
         </div>
         <div className="app-title">
@@ -1260,7 +1261,7 @@ function LoginScreen({
     <main className="login-shell">
       <section className="login-panel">
         <div className="login-brand">
-          <BookMarked size={34} />
+          <img className="login-logo" src={storyStackLogo} alt="" />
           <span>Story Stack</span>
         </div>
         {invite ? (

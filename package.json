@@ -21,6 +21,7 @@
   "build": {
     "appId": "com.storystack.desktop",
     "productName": "Story Stack",
+    "icon": "build/icon.ico",
     "directories": {
       "output": "release"
     },
@@ -29,6 +30,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
