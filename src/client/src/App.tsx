@@ -73,6 +73,7 @@ export function App() {
   const [cachedOfflineBooks, setCachedOfflineBooks] = useState<Book[]>([]);
   const [offlineBookIds, setOfflineBookIds] = useState<Set<string>>(new Set());
   const [savingOfflineBookIds, setSavingOfflineBookIds] = useState<Set<string>>(new Set());
+  const [offlineProgressByBookId, setOfflineProgressByBookId] = useState<Record<string, number | undefined>>({});
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book>();
   const [selectedBookSpace, setSelectedBookSpace] = useState<Space>("library");
@@ -403,13 +404,23 @@ export function App() {
 
   const saveOffline = async (book: Book) => {
     setSavingOfflineBookIds((current) => new Set(current).add(book.id));
+    setOfflineProgressByBookId((current) => ({ ...current, [book.id]: 0 }));
     try {
-      await offlineCache.save(book);
+      await offlineCache.save(book, {
+        onProgress: (progress) => {
+          setOfflineProgressByBookId((current) => ({ ...current, [book.id]: progress.percent }));
+        }
+      });
       setCachedOfflineBooks(await offlineCache.listBooks());
       setOfflineBookIds((current) => new Set(current).add(book.id));
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Book could not be saved offline.");
     } finally {
+      setOfflineProgressByBookId((current) => {
+        const next = { ...current };
+        delete next[book.id];
+        return next;
+      });
       setSavingOfflineBookIds((current) => {
         const next = new Set(current);
         next.delete(book.id);
@@ -434,6 +445,8 @@ export function App() {
     }
     return offlineBookIds.has(book.id) ? "saved" : "idle";
   };
+
+  const offlineProgressFor = (book: Book): number | undefined => offlineProgressByBookId[book.id];
 
   const createShelf = async (event: FormEvent) => {
     event.preventDefault();
@@ -1162,6 +1175,7 @@ export function App() {
                 }}
                 onMoveToShelf={moveToShelf}
                 onOfflineSave={saveOffline}
+                offlineProgressFor={offlineProgressFor}
                 offlineStateFor={offlineStateFor}
                 onPlay={(book) => startPlayback(book, "play")}
                 onRemove={removeFromLibrary}
@@ -1198,6 +1212,7 @@ export function App() {
             onAdd={addToLibrary}
             onMoveToShelf={moveToShelf}
             onOfflineSave={saveOffline}
+            offlineProgressFor={offlineProgressFor}
             offlineStateFor={offlineStateFor}
             onOpenStore={() => {
               setSpace("store");
@@ -1246,6 +1261,7 @@ export function App() {
             onCategoryChange={setLibraryCategoryKey}
             onMoveToShelf={moveToShelf}
             onOfflineSave={saveOffline}
+            offlineProgressFor={offlineProgressFor}
             offlineStateFor={offlineStateFor}
             onPlay={(book) => startPlayback(book, "play")}
             onRemove={removeFromLibrary}
@@ -1722,6 +1738,7 @@ function HomeDashboard({
   onAdd,
   onMoveToShelf,
   onOfflineSave,
+  offlineProgressFor,
   offlineStateFor,
   onOpenStore,
   onPlay,
@@ -1737,6 +1754,7 @@ function HomeDashboard({
   onAdd: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
+  offlineProgressFor: (book: Book) => number | undefined;
   offlineStateFor: (book: Book) => OfflineState;
   onOpenStore: () => void;
   onPlay: (book: Book) => void;
@@ -1771,6 +1789,7 @@ function HomeDashboard({
           onAdd={onAdd}
           onMoveToShelf={onMoveToShelf}
           onOfflineSave={onOfflineSave}
+          offlineProgressFor={offlineProgressFor}
           offlineStateFor={offlineStateFor}
           onPlay={onPlay}
           onRemove={onRemove}
@@ -1949,6 +1968,7 @@ function DashboardRow({
   onAdd,
   onMoveToShelf,
   onOfflineSave,
+  offlineProgressFor,
   offlineStateFor,
   onPlay,
   onRemove,
@@ -1962,6 +1982,7 @@ function DashboardRow({
   onAdd: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave?: (book: Book) => Promise<void>;
+  offlineProgressFor?: (book: Book) => number | undefined;
   offlineStateFor?: (book: Book) => OfflineState;
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => Promise<void>;
@@ -1984,6 +2005,7 @@ function DashboardRow({
             onAdd={() => void onAdd(book)}
             onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
             onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
+            offlineProgress={offlineProgressFor?.(book)}
             offlineState={offlineStateFor?.(book) ?? "idle"}
             onRemove={() => void onRemove(book)}
             onPlay={() => onPlay(book)}
@@ -2043,6 +2065,7 @@ function BookCollectionBrowser({
   onCategoryChange,
   onMoveToShelf,
   onOfflineSave,
+  offlineProgressFor,
   offlineStateFor,
   onPlay,
   onRemove,
@@ -2062,6 +2085,7 @@ function BookCollectionBrowser({
   onCategoryChange: (key?: string) => void;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave?: (book: Book) => Promise<void>;
+  offlineProgressFor?: (book: Book) => number | undefined;
   offlineStateFor?: (book: Book) => OfflineState;
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => Promise<void>;
@@ -2135,6 +2159,7 @@ function BookCollectionBrowser({
                 onAdd={() => void onAdd(book)}
                 onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
                 onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
+                offlineProgress={offlineProgressFor?.(book)}
                 offlineState={offlineStateFor?.(book) ?? "idle"}
                 onRemove={() => void onRemove(book)}
                 onPlay={() => onPlay(book)}
@@ -2370,6 +2395,7 @@ function ShelfBookBrowser({
   onBack,
   onMoveToShelf,
   onOfflineSave,
+  offlineProgressFor,
   offlineStateFor,
   onPlay,
   onRemove,
@@ -2383,6 +2409,7 @@ function ShelfBookBrowser({
   onBack: () => void;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
+  offlineProgressFor: (book: Book) => number | undefined;
   offlineStateFor: (book: Book) => OfflineState;
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => Promise<void>;
@@ -2411,6 +2438,7 @@ function ShelfBookBrowser({
               onAdd={() => void onAdd(book)}
               onMoveToShelf={(targetShelf) => void onMoveToShelf(book, targetShelf)}
               onOfflineSave={() => void onOfflineSave(book)}
+              offlineProgress={offlineProgressFor(book)}
               offlineState={offlineStateFor(book)}
               onRemove={() => void onRemove(book)}
               onPlay={() => onPlay(book)}

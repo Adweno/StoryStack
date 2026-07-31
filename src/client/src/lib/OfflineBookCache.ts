@@ -8,13 +8,15 @@ export class OfflineBookCache {
     return typeof window !== "undefined" && typeof window.caches !== "undefined" && typeof URL.createObjectURL === "function";
   }
 
-  async save(book: Book): Promise<void> {
+  async save(book: Book, options: OfflineBookSaveOptions = {}): Promise<void> {
     this.assertSupported();
     const cache = await caches.open(CACHE_NAME);
-    await this.cacheUrl(cache, this.audioUrl(book.id));
+    options.onProgress?.({ percent: 0, receivedBytes: 0 });
+    await this.cacheUrl(cache, this.audioUrl(book.id), options.onProgress);
     if (book.coverPath) {
       await this.cacheUrl(cache, this.coverUrl(book.id));
     }
+    options.onProgress?.({ percent: 100 });
     this.saveBookMetadata(book);
   }
 
@@ -68,12 +70,34 @@ export class OfflineBookCache {
     return { url, revoke: () => URL.revokeObjectURL(url) };
   }
 
-  private async cacheUrl(cache: Cache, url: string): Promise<void> {
+  private async cacheUrl(cache: Cache, url: string, onProgress?: (progress: DownloadProgress) => void): Promise<void> {
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error("Download failed.");
     }
-    await cache.put(url, response);
+    const trackingResponse = response.clone();
+    await Promise.all([cache.put(url, response), this.trackDownloadProgress(trackingResponse, onProgress)]);
+  }
+
+  private async trackDownloadProgress(response: Response, onProgress?: (progress: DownloadProgress) => void): Promise<void> {
+    if (!onProgress || !response.body) {
+      return;
+    }
+    const totalBytes = Number(response.headers.get("content-length") ?? 0) || undefined;
+    const reader = response.body.getReader();
+    let receivedBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      receivedBytes += value.byteLength;
+      onProgress({
+        percent: totalBytes ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100)) : undefined,
+        receivedBytes,
+        totalBytes
+      });
+    }
   }
 
   private audioUrl(bookId: string): string {
@@ -122,4 +146,14 @@ function isBookMetadata(value: unknown): value is Book {
 export interface CachedAudioSource {
   url: string;
   revoke?: () => void;
+}
+
+export interface DownloadProgress {
+  percent?: number;
+  receivedBytes?: number;
+  totalBytes?: number;
+}
+
+export interface OfflineBookSaveOptions {
+  onProgress?: (progress: DownloadProgress) => void;
 }

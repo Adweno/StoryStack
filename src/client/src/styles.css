@@ -1662,13 +1662,60 @@ h1 {
   color: #ffd38d;
 }
 
-.icon-button.saving-offline svg {
-  animation: story-stack-spin 900ms linear infinite;
+.download-progress-ring {
+  width: 23px;
+  height: 23px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  color: inherit;
 }
 
-@keyframes story-stack-spin {
-  to {
-    transform: rotate(360deg);
+.download-progress-ring svg {
+  grid-area: 1 / 1;
+  width: 23px;
+  height: 23px;
+  transform: rotate(-90deg);
+}
+
+.download-progress-track,
+.download-progress-value {
+  fill: none;
+  stroke-width: 4;
+}
+
+.download-progress-track {
+  stroke: rgb(255 247 223 / 24%);
+}
+
+.download-progress-value {
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-dasharray: calc(var(--download-progress) * 0.942) 94.2;
+}
+
+.download-progress-ring > span {
+  grid-area: 1 / 1;
+  font-size: 8px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.download-progress-ring.indeterminate .download-progress-value {
+  stroke-dasharray: 26 94.2;
+  animation: story-stack-progress-pulse 1100ms ease-in-out infinite;
+}
+
+@keyframes story-stack-progress-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    stroke-dashoffset: 0;
+  }
+
+  50% {
+    opacity: 1;
+    stroke-dashoffset: -34;
   }
 }
 

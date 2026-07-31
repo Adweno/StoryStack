@@ -1,6 +1,6 @@
-import { Check, Download, LoaderCircle, MoreVertical, Play, Plus, Trash2, Volume2 } from "lucide-react";
+import { Check, Download, MoreVertical, Play, Plus, Trash2, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { BookCover } from "./BookCover";
 import type { Book, Shelf } from "../types";
@@ -11,6 +11,7 @@ export function BookCard({
   onAdd,
   onMoveToShelf,
   onOfflineSave,
+  offlineProgress,
   offlineState = "idle",
   onRemove,
   onPlay,
@@ -23,6 +24,7 @@ export function BookCard({
   onAdd: () => void;
   onMoveToShelf?: (shelf: Shelf) => void;
   onOfflineSave?: () => void;
+  offlineProgress?: number;
   offlineState?: "idle" | "saving" | "saved";
   onRemove: () => void;
   onPlay: () => void;
@@ -88,6 +90,7 @@ export function BookCard({
   };
 
   const closeMenu = () => setMenuOpen(false);
+  const downloadProgress = typeof offlineProgress === "number" ? Math.max(0, Math.min(100, offlineProgress)) : undefined;
 
   return (
     <article className="book-card">
@@ -114,9 +117,17 @@ export function BookCard({
               className={offlineState === "saved" ? "icon-button saved-offline" : offlineState === "saving" ? "icon-button saving-offline" : "icon-button"}
               disabled={offlineState !== "idle"}
               onClick={onOfflineSave}
-              title={offlineState === "saved" ? "Saved offline" : offlineState === "saving" ? "Saving offline" : "Save offline"}
+              title={
+                offlineState === "saved"
+                  ? "Saved offline"
+                  : offlineState === "saving" && downloadProgress !== undefined
+                    ? `Saving offline: ${Math.round(downloadProgress)}%`
+                    : offlineState === "saving"
+                      ? "Saving offline"
+                      : "Save offline"
+              }
             >
-              {offlineState === "saved" ? <Check size={16} /> : offlineState === "saving" ? <LoaderCircle size={16} /> : <Download size={16} />}
+              {offlineState === "saved" ? <Check size={16} /> : offlineState === "saving" ? <DownloadProgressRing progress={downloadProgress} /> : <Download size={16} />}
             </button>
           )}
           {!inLibrary && (
@@ -162,6 +173,19 @@ export function BookCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function DownloadProgressRing({ progress }: { progress?: number }) {
+  const progressStyle = { "--download-progress": progress ?? 0 } as CSSProperties;
+  return (
+    <span className={progress === undefined ? "download-progress-ring indeterminate" : "download-progress-ring"} style={progressStyle}>
+      <svg viewBox="0 0 36 36" aria-hidden="true">
+        <circle className="download-progress-track" cx="18" cy="18" r="15" />
+        <circle className="download-progress-value" cx="18" cy="18" r="15" />
+      </svg>
+      {progress !== undefined && <span>{Math.round(progress)}</span>}
+    </span>
   );
 }
 
