@@ -43,6 +43,12 @@ type View = "home" | "library" | "series" | "authors" | "genres" | "shelves" | "
 type Space = "library" | "store";
 type OfflineState = "idle" | "saving" | "saved";
 type SettingsTab = "access" | "catalog";
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
+const LAST_USER_KEY = "story-stack-last-user-v1";
 
 export function App() {
   const api = useMemo(() => new ApiClient(), []);
@@ -53,9 +59,12 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement>(null);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent>();
+  const [offlineOnly, setOfflineOnly] = useState(false);
   const [loginMessage, setLoginMessage] = useState("");
   const [storeBooks, setStoreBooks] = useState<Book[]>([]);
   const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
+  const [cachedOfflineBooks, setCachedOfflineBooks] = useState<Book[]>([]);
   const [offlineBookIds, setOfflineBookIds] = useState<Set<string>>(new Set());
   const [savingOfflineBookIds, setSavingOfflineBookIds] = useState<Set<string>>(new Set());
   const [shelves, setShelves] = useState<Shelf[]>([]);
@@ -95,9 +104,15 @@ export function App() {
   const [userMessage, setUserMessage] = useState("");
 
   const libraryIds = useMemo(() => new Set(libraryBooks.map((book) => book.id)), [libraryBooks]);
+  const downloadedBookSource = useMemo(() => {
+    const booksById = new Map<string, Book>();
+    cachedOfflineBooks.forEach((book) => booksById.set(book.id, book));
+    libraryBooks.forEach((book) => booksById.set(book.id, book));
+    return [...booksById.values()];
+  }, [cachedOfflineBooks, libraryBooks]);
   const downloadedBooks = useMemo(
-    () => libraryBooks.filter((book) => offlineBookIds.has(book.id) && matchesBookQuery(book, query)),
-    [libraryBooks, offlineBookIds, query]
+    () => downloadedBookSource.filter((book) => offlineBookIds.has(book.id) && matchesBookQuery(book, query)),
+    [downloadedBookSource, offlineBookIds, query]
   );
   const effectiveLibraryBrowseMode = browseModeForView(view, libraryBrowseMode);
   const effectiveStoreBrowseMode = browseModeForView(view, storeBrowseMode);
@@ -112,14 +127,28 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) {
+    const beforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const appInstalled = () => setInstallPrompt(undefined);
+    window.addEventListener("beforeinstallprompt", beforeInstallPrompt);
+    window.addEventListener("appinstalled", appInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", beforeInstallPrompt);
+      window.removeEventListener("appinstalled", appInstalled);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user || offlineOnly) {
       return;
     }
     const timer = window.setTimeout(() => {
       void api.store(query).then(setStoreBooks).catch(() => setUser(undefined));
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [api, query, user]);
+  }, [api, offlineOnly, query, user]);
 
   useEffect(() => {
     if (!accountOpen) {
@@ -146,12 +175,13 @@ export function App() {
   }, [api, space, user?.role, view]);
 
   useEffect(() => {
-    if (!user || libraryBooks.length === 0) {
+    if (!user) {
       setOfflineBookIds(new Set());
       return;
     }
     let active = true;
-    void Promise.all(libraryBooks.map(async (book) => [book.id, await offlineCache.has(book.id)] as const)).then((states) => {
+    const candidateBooks = downloadedBookSource;
+    void Promise.all(candidateBooks.map(async (book) => [book.id, await offlineCache.has(book.id)] as const)).then((states) => {
       if (!active) {
         return;
       }
@@ -160,23 +190,42 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [libraryBooks, offlineCache, user]);
+  }, [downloadedBookSource, offlineCache, user]);
 
   const refresh = async () => {
     try {
       const [me, store, library, shelfList] = await Promise.all([api.me(), api.store(query), api.library(), api.shelves()]);
+      window.localStorage.setItem(LAST_USER_KEY, JSON.stringify(me));
+      setOfflineOnly(false);
       setUser(me);
       setStoreBooks(store);
       setLibraryBooks(library.books);
+      setCachedOfflineBooks(await offlineCache.listBooks());
       setShelves(shelfList);
       if (selectedShelf) {
         const shelfBooks = await api.shelfBooks(selectedShelf.id);
         setSelectedShelfBooks(shelfBooks);
       }
     } catch (error) {
+      const cachedBooks = await offlineCache.listBooks();
+      if (cachedBooks.length > 0) {
+        setOfflineOnly(true);
+        setUser(readLastUser() ?? { id: "offline", name: "Offline", role: "user", status: "active" });
+        setStoreBooks([]);
+        setLibraryBooks([]);
+        setCachedOfflineBooks(cachedBooks);
+        setShelves([]);
+        setSelectedShelf(undefined);
+        setSelectedShelfBooks([]);
+        setSpace("library");
+        setView("downloads");
+        return;
+      }
       setUser(undefined);
+      setOfflineOnly(false);
       setStoreBooks([]);
       setLibraryBooks([]);
+      setCachedOfflineBooks([]);
       setShelves([]);
       setSelectedShelf(undefined);
       setSelectedShelfBooks([]);
@@ -185,16 +234,29 @@ export function App() {
   };
 
   const logout = async () => {
-    await api.logout();
+    if (!offlineOnly) {
+      await api.logout();
+    }
     setAccountOpen(false);
     setUser(undefined);
+    setOfflineOnly(false);
     setStoreBooks([]);
     setLibraryBooks([]);
+    setCachedOfflineBooks([]);
     setShelves([]);
     setSelectedShelf(undefined);
     setSelectedShelfBooks([]);
     setSelectedBook(undefined);
     setPlayback(undefined);
+  };
+
+  const installApp = async () => {
+    if (!installPrompt) {
+      return;
+    }
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(undefined);
   };
 
   const addToLibrary = async (book: Book) => {
@@ -242,6 +304,7 @@ export function App() {
     setSavingOfflineBookIds((current) => new Set(current).add(book.id));
     try {
       await offlineCache.save(book);
+      setCachedOfflineBooks(await offlineCache.listBooks());
       setOfflineBookIds((current) => new Set(current).add(book.id));
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Book could not be saved offline.");
@@ -256,6 +319,7 @@ export function App() {
 
   const removeOffline = async (book: Book) => {
     await offlineCache.remove(book);
+    setCachedOfflineBooks(await offlineCache.listBooks());
     setOfflineBookIds((current) => {
       const next = new Set(current);
       next.delete(book.id);
@@ -499,24 +563,32 @@ export function App() {
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search books, authors, narrators" />
         </label>
         <div className="topbar-actions">
-          <button
-            className={space === "store" ? "store-button active" : "store-button"}
-            onClick={() => {
-              if (space === "store") {
-                setSpace("library");
-                setView("home");
-                setLibraryCategoryKey(undefined);
-              } else {
-                setSpace("store");
-                setView("home");
-                setStoreBrowseMode("title");
-                setStoreCategoryKey(undefined);
-              }
-            }}
-          >
-            {space === "store" ? <Library size={18} /> : <Store size={18} />}
-            {space === "store" ? "My Library" : "Store"}
-          </button>
+          {installPrompt && (
+            <button className="install-button" onClick={() => void installApp()}>
+              <Download size={18} />
+              Install App
+            </button>
+          )}
+          {!offlineOnly && (
+            <button
+              className={space === "store" ? "store-button active" : "store-button"}
+              onClick={() => {
+                if (space === "store") {
+                  setSpace("library");
+                  setView("home");
+                  setLibraryCategoryKey(undefined);
+                } else {
+                  setSpace("store");
+                  setView("home");
+                  setStoreBrowseMode("title");
+                  setStoreCategoryKey(undefined);
+                }
+              }}
+            >
+              {space === "store" ? <Library size={18} /> : <Store size={18} />}
+              {space === "store" ? "My Library" : "Store"}
+            </button>
+          )}
           {space === "store" && user?.role === "admin" && (
             <button className={view === "admin" ? "settings-button active" : "settings-button"} onClick={() => setView("admin")}>
               <Settings size={18} />
@@ -562,64 +634,71 @@ export function App() {
       </header>
       <aside className="sidebar">
         <nav>
-          <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>
-            <Home size={18} />
-            Home
-          </button>
-          <button
-            className={view === "library" ? "active" : ""}
-            onClick={() => {
-              setView("library");
-              if (space === "store") {
-                setStoreBrowseMode("title");
-                setStoreCategoryKey(undefined);
-              }
-            }}
-          >
-            <Library size={18} />
-            {space === "store" ? "Books" : "Library"}
-          </button>
-          <button
-            className={view === "series" ? "active" : ""}
-            onClick={() => {
-              setView("series");
-              if (space === "store") {
-                setStoreBrowseMode("series");
-                setStoreCategoryKey(undefined);
-              }
-            }}
-          >
-            <BookMarked size={18} />
-            Series
-          </button>
-          <button
-            className={view === "authors" ? "active" : ""}
-            onClick={() => {
-              setView("authors");
-              if (space === "store") {
-                setStoreBrowseMode("author");
-                setStoreCategoryKey(undefined);
-              }
-            }}
-          >
-            <Users size={18} />
-            Authors
-          </button>
-          <button
-            className={view === "genres" ? "active" : ""}
-            onClick={() => {
-              setView("genres");
-              if (space === "store") {
-                setStoreBrowseMode("genre");
-                setStoreCategoryKey(undefined);
-              }
-            }}
-          >
-            <Tags size={18} />
-            Genres
-          </button>
-          {space === "library" && (
+          {offlineOnly ? (
+            <button className="active" onClick={() => setView("downloads")}>
+              <Download size={18} />
+              Downloads
+            </button>
+          ) : (
             <>
+              <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>
+                <Home size={18} />
+                Home
+              </button>
+              <button
+                className={view === "library" ? "active" : ""}
+                onClick={() => {
+                  setView("library");
+                  if (space === "store") {
+                    setStoreBrowseMode("title");
+                    setStoreCategoryKey(undefined);
+                  }
+                }}
+              >
+                <Library size={18} />
+                {space === "store" ? "Books" : "Library"}
+              </button>
+              <button
+                className={view === "series" ? "active" : ""}
+                onClick={() => {
+                  setView("series");
+                  if (space === "store") {
+                    setStoreBrowseMode("series");
+                    setStoreCategoryKey(undefined);
+                  }
+                }}
+              >
+                <BookMarked size={18} />
+                Series
+              </button>
+              <button
+                className={view === "authors" ? "active" : ""}
+                onClick={() => {
+                  setView("authors");
+                  if (space === "store") {
+                    setStoreBrowseMode("author");
+                    setStoreCategoryKey(undefined);
+                  }
+                }}
+              >
+                <Users size={18} />
+                Authors
+              </button>
+              <button
+                className={view === "genres" ? "active" : ""}
+                onClick={() => {
+                  setView("genres");
+                  if (space === "store") {
+                    setStoreBrowseMode("genre");
+                    setStoreCategoryKey(undefined);
+                  }
+                }}
+              >
+                <Tags size={18} />
+                Genres
+              </button>
+              {space === "library" && (
+                <>
               <button className={view === "shelves" ? "active" : ""} onClick={() => setView("shelves")}>
                 <BookMarked size={18} />
                 Shelves
@@ -628,6 +707,8 @@ export function App() {
                 <Download size={18} />
                 Downloads
               </button>
+                </>
+              )}
             </>
           )}
         </nav>
@@ -2125,4 +2206,20 @@ function matchesBookQuery(book: Book, query: string): boolean {
     return true;
   }
   return [book.title, book.author, book.narrator, book.series, ...book.genres].some((field) => field?.toLowerCase().includes(value));
+}
+
+function readLastUser(): User | undefined {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LAST_USER_KEY) ?? "null") as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    const user = parsed as Partial<User>;
+    if (typeof user.id !== "string" || typeof user.name !== "string" || (user.role !== "admin" && user.role !== "user")) {
+      return undefined;
+    }
+    return user as User;
+  } catch {
+    return undefined;
+  }
 }

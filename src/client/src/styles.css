@@ -450,6 +450,26 @@ h1 {
   font-weight: 720;
 }
 
+.install-button {
+  border: 1px solid #31504d;
+  background: #182724;
+  color: #dce8de;
+  border-radius: 7px;
+  min-height: 42px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.install-button:hover {
+  background: #244f4c;
+  border-color: #4f8d87;
+  color: #fff7df;
+}
+
 .store-button.active,
 .store-button:hover {
   background: #8c4d57;
@@ -482,6 +502,18 @@ h1 {
   border-color: #604154;
   background: #231c24;
   color: #ead8d0;
+}
+
+.store-space .install-button {
+  border-color: #604154;
+  background: #231c24;
+  color: #ead8d0;
+}
+
+.store-space .install-button:hover {
+  background: #5a3347;
+  border-color: #9d6575;
+  color: #fff7df;
 }
 
 .store-space .settings-button.active,
@@ -1804,6 +1836,7 @@ audio {
   }
 
   .store-button,
+  .install-button,
   .settings-button,
   .account-button {
     flex: 1 1 auto;

@@ -12,6 +12,8 @@ Story Stack is a self-hosted audiobook Store and personal library app. It reads 
 - Native Story Stack sign-in
 - Invite-based sharing
 - Remote access settings
+- Installable web app support
+- Device-local offline downloads for saved books
 - Responsive React UI
 - Local SQLite database stored outside the source media folder
 
@@ -34,6 +36,18 @@ Then open:
 ```text
 http://localhost:4100
 ```
+
+## Installable Web App
+
+Story Stack is PWA-first. Users open the public HTTPS Story Stack address in a browser, sign in, and install it from the browser as an app.
+
+Typical browser actions:
+
+- Chrome/Edge desktop: use the install icon in the address bar or Story Stack's `Install App` button when shown.
+- Android Chrome: open the browser menu and choose `Add to Home screen` or `Install app`.
+- iPhone/iPad Safari: use Share, then `Add to Home Screen`.
+
+Downloaded books are saved to that device's browser app storage for offline listening. Browser storage is controlled by the device/browser, so users should treat downloads as a local offline cache rather than a permanent backup.
 
 ## Development
 
@@ -61,9 +75,9 @@ http://localhost:5173
 npm test
 ```
 
-## Windows Desktop App
+## Optional Windows Desktop App
 
-The Windows app is a desktop client for a Story Stack server. It does not run the audiobook server locally and it does not need the audiobook files on the Windows machine.
+The Windows app is now optional. The preferred cross-device experience is the installable web app above. The desktop app remains a thin client for a Story Stack server; it does not run the audiobook server locally and it does not need the audiobook files on the Windows machine.
 
 For local testing:
 
