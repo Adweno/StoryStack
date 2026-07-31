@@ -1288,9 +1288,13 @@ h1 {
   align-items: start;
 }
 
+.book-detail-cover {
+  width: min(260px, 100%);
+}
+
 .book-detail-cover .book-cover {
   width: 100%;
-  aspect-ratio: 2 / 3;
+  aspect-ratio: 1;
   border-radius: 8px;
   box-shadow: 0 18px 42px rgb(0 0 0 / 34%);
 }
