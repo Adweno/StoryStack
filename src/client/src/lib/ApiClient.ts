@@ -59,6 +59,10 @@ export class ApiClient {
     return this.post(`/api/books/${encodeURIComponent(bookId)}/reviews`, input);
   }
 
+  async deleteMyBookReview(bookId: string): Promise<void> {
+    await this.request(`/api/books/${encodeURIComponent(bookId)}/reviews/me`, { method: "DELETE" });
+  }
+
   async shelves(): Promise<Shelf[]> {
     const data = await this.get<{ shelves: Shelf[] }>("/api/shelves");
     return data.shelves;

@@ -276,6 +276,10 @@ export class StoryStackDatabase implements LibraryRepository {
     return savedReview;
   }
 
+  deleteBookReview(bookId: string, userId: string): void {
+    this.database.prepare("DELETE FROM book_reviews WHERE bookId = ? AND userId = ?").run(bookId, userId);
+  }
+
   listBookReviews(bookId: string): BookReview[] {
     return (this.database
       .prepare(
@@ -296,6 +300,11 @@ export class StoryStackDatabase implements LibraryRepository {
       averageRating: row.averageRating ?? 0,
       reviewCount: row.reviewCount
     };
+  }
+
+  isBookInUserLibrary(userId: string, bookId: string): boolean {
+    const row = this.database.prepare("SELECT 1 FROM user_library_books WHERE userId = ? AND bookId = ?").get(userId, bookId);
+    return Boolean(row);
   }
 
   listBooks(): Book[] {

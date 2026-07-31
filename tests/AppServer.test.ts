@@ -176,6 +176,14 @@ describe("AppServer", () => {
     const loginResponse = await request(app).post("/api/auth/login").send({ username: "admin", password: "admin" }).expect(200);
     const cookie = loginResponse.headers["set-cookie"];
 
+    await request(app)
+      .post("/api/books/book_reviewed/reviews")
+      .set("Cookie", cookie)
+      .send({ rating: 5, review: "Fantastic listen." })
+      .expect(403);
+
+    await request(app).post("/api/library").set("Cookie", cookie).send({ bookId: "book_reviewed" }).expect(201);
+
     const savedReview = await request(app)
       .post("/api/books/book_reviewed/reviews")
       .set("Cookie", cookie)
@@ -195,6 +203,11 @@ describe("AppServer", () => {
     const updatedReviews = await request(app).get("/api/books/book_reviewed/reviews").set("Cookie", cookie).expect(200);
     expect(updatedReviews.body.summary).toMatchObject({ averageRating: 4, reviewCount: 1 });
     expect(updatedReviews.body.myReview).toMatchObject({ rating: 4, review: "Still very good." });
+
+    await request(app).delete("/api/books/book_reviewed/reviews/me").set("Cookie", cookie).expect(204);
+    const removedReviews = await request(app).get("/api/books/book_reviewed/reviews").set("Cookie", cookie).expect(200);
+    expect(removedReviews.body.summary).toMatchObject({ averageRating: 0, reviewCount: 0 });
+    expect(removedReviews.body.reviews).toHaveLength(0);
   });
 
   it("requires login and admin role for Store settings routes", async () => {

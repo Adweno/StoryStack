@@ -215,11 +215,28 @@ export class AppServer {
       if (!book || book.hidden) {
         return response.status(404).json({ error: "Book was not found." });
       }
+      if (!this.context.database.isBookInUserLibrary(user.id, request.params.bookId)) {
+        return response.status(403).json({ error: "Add this book to your library before reviewing it." });
+      }
       const review = this.context.database.upsertBookReview({ bookId: request.params.bookId, userId: user.id, ...parsed.data });
       response.json({
         review: { ...review, isMine: true },
         summary: this.context.database.getBookReviewSummary(request.params.bookId)
       });
+    });
+
+    this.app.delete("/api/books/:bookId/reviews/me", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      if (!this.context.database.isBookInUserLibrary(user.id, request.params.bookId)) {
+        return response.status(403).json({ error: "Reviews can only be managed from your library." });
+      }
+      this.context.database.deleteBookReview(request.params.bookId, user.id);
+      response.status(204).send();
     });
 
     this.app.get("/api/library", (request, response) => {

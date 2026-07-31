@@ -348,6 +348,19 @@ export function App() {
     }
   };
 
+  const deleteBookReview = async (book: Book) => {
+    const confirmed = window.confirm("Remove your review for this book?");
+    if (!confirmed) return;
+    setReviewMessage("");
+    try {
+      await api.deleteMyBookReview(book.id);
+      await loadBookReviews(book.id);
+      setReviewMessage("Review removed.");
+    } catch (error) {
+      setReviewMessage(error instanceof Error ? error.message : "Review could not be removed.");
+    }
+  };
+
   const startPlayback = (book: Book, mode: PlaybackRequest["mode"]) => {
     setPlayback({ book, mode, requestId: Date.now() });
   };
@@ -828,6 +841,7 @@ export function App() {
             onBack={() => setSelectedBook(undefined)}
             onPlay={() => startPlayback(selectedBook, selectedBookSpace === "store" ? "sample" : "play")}
             onRemove={() => void removeFromLibrary(selectedBook)}
+            onDeleteReview={() => void deleteBookReview(selectedBook)}
             onSaveReview={(rating, review) => void saveBookReview(selectedBook, rating, review)}
             reviewMessage={reviewMessage}
             reviews={selectedBookReviews}
@@ -1189,6 +1203,7 @@ function BookDetailPage({
   onBack,
   onPlay,
   onRemove,
+  onDeleteReview,
   onSaveReview,
   reviewMessage,
   reviews,
@@ -1200,6 +1215,7 @@ function BookDetailPage({
   onBack: () => void;
   onPlay: () => void;
   onRemove: () => void;
+  onDeleteReview: () => void;
   onSaveReview: (rating: number, review: string) => void;
   reviewMessage: string;
   reviews?: BookReviewResponse;
@@ -1214,6 +1230,7 @@ function BookDetailPage({
   }, [book.id, reviews?.myReview?.rating, reviews?.myReview?.review]);
 
   const summary = reviews?.summary ?? { averageRating: 0, reviewCount: 0 };
+  const canManageReview = source === "library" && inLibrary;
 
   return (
     <section className="book-detail-page">
@@ -1281,18 +1298,27 @@ function BookDetailPage({
                 {summary.reviewCount > 0 ? `${summary.averageRating.toFixed(1)} / 5 from ${summary.reviewCount} review${summary.reviewCount === 1 ? "" : "s"}` : "No reviews yet"}
               </span>
             </div>
-            <form
-              className="review-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                onSaveReview(rating, reviewText);
-              }}
-            >
-              <StarRatingInput value={rating} onChange={setRating} />
-              <textarea value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Share what you thought about this book" rows={4} />
-              <button className="primary command-button">{reviews?.myReview ? "Update Review" : "Save Review"}</button>
-              {reviewMessage && <span>{reviewMessage}</span>}
-            </form>
+            {canManageReview && (
+              <form
+                className="review-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSaveReview(rating, reviewText);
+                }}
+              >
+                <StarRatingInput value={rating} onChange={setRating} />
+                <textarea value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Share what you thought about this book" rows={4} />
+                <div className="review-form-actions">
+                  <button className="primary command-button">{reviews?.myReview ? "Update Review" : "Save Review"}</button>
+                  {reviews?.myReview && (
+                    <button className="command-button danger" onClick={onDeleteReview} type="button">
+                      Remove Review
+                    </button>
+                  )}
+                </div>
+                {reviewMessage && <span>{reviewMessage}</span>}
+              </form>
+            )}
             <div className="review-list">
               {reviews?.reviews.map((review) => (
                 <article className="review-card" key={review.id}>

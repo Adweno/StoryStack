@@ -1415,6 +1415,21 @@ h1 {
   color: #d8cdbc;
 }
 
+.review-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.command-button.danger {
+  color: #ffddd2;
+  border-color: #8f5161;
+}
+
+.command-button.danger:hover {
+  background: #3a1f21;
+}
+
 .star-rating-input,
 .star-rating-display {
   display: inline-flex;
