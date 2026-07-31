@@ -609,42 +609,73 @@ h1 {
 }
 
 .light-theme:not(.store-space) {
-  background: #f4efe6;
-  color: #201b16;
+  color: #241f19;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 64%), transparent 260px),
+    #f1eadf;
+  color-scheme: light;
 }
 
 .light-theme:not(.store-space) .app-topbar,
 .light-theme:not(.store-space) .sidebar {
-  background: #fbf7ee;
-  border-color: #dfd3c2;
+  background: #fbf7ef;
+  border-color: #d8c9b6;
   color: #2a241d;
   box-shadow: 0 10px 28px rgb(88 65 39 / 12%);
 }
 
 .light-theme:not(.store-space) .workspace {
-  background: #f4efe6;
+  background: #f1eadf;
 }
 
 .light-theme:not(.store-space) h1,
 .light-theme:not(.store-space) h2,
 .light-theme:not(.store-space) h3,
+.light-theme:not(.store-space) .group-heading h2,
+.light-theme:not(.store-space) .plain-title,
 .light-theme:not(.store-space) .book-card strong,
 .light-theme:not(.store-space) .category-card strong,
+.light-theme:not(.store-space) .review-card strong,
 .light-theme:not(.store-space) .account-details dd,
 .light-theme:not(.store-space) .account-password-form strong,
-.light-theme:not(.store-space) .book-detail-meta dd {
-  color: #201b16;
+.light-theme:not(.store-space) .book-detail-heading h2,
+.light-theme:not(.store-space) .book-detail-meta dd,
+.light-theme:not(.store-space) .book-detail-description h3,
+.light-theme:not(.store-space) .book-review-heading h3,
+.light-theme:not(.store-space) .settings-section-heading h2,
+.light-theme:not(.store-space) .settings-row-label strong,
+.light-theme:not(.store-space) .sync-summary-grid strong,
+.light-theme:not(.store-space) .shelf-open-button strong {
+  color: #241f19;
 }
 
 .light-theme:not(.store-space) .app-title p,
 .light-theme:not(.store-space) .book-card p,
 .light-theme:not(.store-space) .byline,
+.light-theme:not(.store-space) .group-heading span,
+.light-theme:not(.store-space) .category-card span,
+.light-theme:not(.store-space) .book-menu-section span,
+.light-theme:not(.store-space) .book-menu-section small,
+.light-theme:not(.store-space) .account-panel-header span,
+.light-theme:not(.store-space) .account-details dt,
+.light-theme:not(.store-space) .settings-panel-title span,
+.light-theme:not(.store-space) .settings-save-message,
+.light-theme:not(.store-space) .book-detail-meta dt,
 .light-theme:not(.store-space) .book-detail-heading p,
 .light-theme:not(.store-space) .book-detail-description p,
+.light-theme:not(.store-space) .book-review-heading span,
 .light-theme:not(.store-space) .review-card span,
 .light-theme:not(.store-space) .review-card p,
-.light-theme:not(.store-space) .review-empty {
-  color: #665b4e;
+.light-theme:not(.store-space) .review-empty,
+.light-theme:not(.store-space) .settings-section-heading span,
+.light-theme:not(.store-space) .settings-row-label span,
+.light-theme:not(.store-space) .metadata-summary p,
+.light-theme:not(.store-space) .managed-user-row span,
+.light-theme:not(.store-space) .shelf-open-button span,
+.light-theme:not(.store-space) .empty-state,
+.light-theme:not(.store-space) .muted-player,
+.light-theme:not(.store-space) .now-playing span {
+  color: #6b5f50;
 }
 
 .light-theme:not(.store-space) .book-card,
@@ -655,12 +686,21 @@ h1 {
 .light-theme:not(.store-space) .book-detail-meta div,
 .light-theme:not(.store-space) .review-form,
 .light-theme:not(.store-space) .review-card,
+.light-theme:not(.store-space) .shelf-form,
+.light-theme:not(.store-space) .shelf-row,
+.light-theme:not(.store-space) .settings-panel,
+.light-theme:not(.store-space) .metadata-summary,
+.light-theme:not(.store-space) .managed-user-row,
+.light-theme:not(.store-space) .book-menu-panel,
+.light-theme:not(.store-space) .settings-message,
+.light-theme:not(.store-space) .sync-summary-grid span,
+.light-theme:not(.store-space) .plex-section-list button,
 .light-theme:not(.store-space) .search-box,
 .light-theme:not(.store-space) .account-button,
 .light-theme:not(.store-space) .user-settings-button {
   background: #fffaf2;
-  border-color: #d9cbb8;
-  color: #201b16;
+  border-color: #d8c9b6;
+  color: #241f19;
 }
 
 .light-theme:not(.store-space) input,
@@ -668,16 +708,180 @@ h1 {
 .light-theme:not(.store-space) textarea,
 .light-theme:not(.store-space) .settings-row-control select,
 .light-theme:not(.store-space) .account-password-form input,
-.light-theme:not(.store-space) .review-form textarea {
+.light-theme:not(.store-space) .review-form textarea,
+.light-theme:not(.store-space) .settings-inline-form input,
+.light-theme:not(.store-space) .settings-inline-form select,
+.light-theme:not(.store-space) .password-reset-form input,
+.light-theme:not(.store-space) .role-select,
+.light-theme:not(.store-space) .shelf-form input,
+.light-theme:not(.store-space) .shelf-row select {
   background: #fffdf8;
-  border-color: #cdbda7;
-  color: #201b16;
+  border-color: #c9b79f;
+  color: #241f19;
 }
 
 .light-theme:not(.store-space) nav button.active,
-.light-theme:not(.store-space) nav button:hover {
-  background: #dfe9df;
-  color: #201b16;
+.light-theme:not(.store-space) nav button:hover,
+.light-theme:not(.store-space) .book-menu-panel button:hover,
+.light-theme:not(.store-space) .shelf-open-button:hover {
+  background: #e4eadc;
+  color: #241f19;
+}
+
+.light-theme:not(.store-space) .book-card:hover,
+.light-theme:not(.store-space) .category-card:hover,
+.light-theme:not(.store-space) .managed-user-row:hover,
+.light-theme:not(.store-space) .account-button:hover,
+.light-theme:not(.store-space) .user-settings-button:hover,
+.light-theme:not(.store-space) .detail-back-button:hover {
+  background: #fff4e4;
+  border-color: #bfa987;
+}
+
+.light-theme:not(.store-space) .book-card {
+  box-shadow: 0 10px 24px rgb(94 71 43 / 8%);
+}
+
+.light-theme:not(.store-space) .book-cover,
+.light-theme:not(.store-space) .empty-cover,
+.light-theme:not(.store-space) .compact-empty-cover {
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 38%), transparent 48%),
+    #dbe8dc;
+  color: #314238;
+}
+
+.light-theme:not(.store-space) .cover-stack .book-cover {
+  border-color: #fffaf2;
+}
+
+.light-theme:not(.store-space) .book-menu-panel button {
+  color: #241f19;
+}
+
+.light-theme:not(.store-space) .book-menu-section,
+.light-theme:not(.store-space) .book-review-section,
+.light-theme:not(.store-space) .account-password-form,
+.light-theme:not(.store-space) .settings-row,
+.light-theme:not(.store-space) .group-heading {
+  border-color: #d8c9b6;
+}
+
+.light-theme:not(.store-space) .store-button {
+  background: #fff6e8;
+  border-color: #c69b55;
+  color: #8a5b12;
+}
+
+.light-theme:not(.store-space) .store-button:hover {
+  background: #f5e5cb;
+  border-color: #b88734;
+}
+
+.light-theme:not(.store-space) .install-button,
+.light-theme:not(.store-space) .settings-button {
+  background: #e8f1eb;
+  border-color: #9db9ac;
+  color: #24463c;
+}
+
+.light-theme:not(.store-space) .install-button:hover,
+.light-theme:not(.store-space) .settings-button:hover,
+.light-theme:not(.store-space) .settings-button.active {
+  background: #d8e8dd;
+  border-color: #799f8c;
+}
+
+.light-theme:not(.store-space) .icon-button,
+.light-theme:not(.store-space) .status-button,
+.light-theme:not(.store-space) .command-button,
+.light-theme:not(.store-space) .back-button,
+.light-theme:not(.store-space) .detail-back-button {
+  background: #fff9ef;
+  border-color: #cdbda7;
+  color: #3b3127;
+}
+
+.light-theme:not(.store-space) .primary,
+.light-theme:not(.store-space) .group-action-button,
+.light-theme:not(.store-space) .group-add-button {
+  background: #9a5b67;
+  border-color: #9a5b67;
+  color: #fffaf2;
+}
+
+.light-theme:not(.store-space) .group-action-button.danger,
+.light-theme:not(.store-space) .command-button.danger {
+  background: #fff4ef;
+  border-color: #b57578;
+  color: #8d3e3f;
+}
+
+.light-theme:not(.store-space) .icon-button.success,
+.light-theme:not(.store-space) .icon-button.saved-offline {
+  background: #5f784d;
+  border-color: #5f784d;
+  color: #fffaf2;
+}
+
+.light-theme:not(.store-space) .star-rating-input,
+.light-theme:not(.store-space) .star-rating-display {
+  color: #9c9285;
+}
+
+.light-theme:not(.store-space) .settings-tabs {
+  background: #fff7ec;
+  border-color: #d8c9b6;
+}
+
+.light-theme:not(.store-space) .settings-tabs button {
+  color: #6b5f50;
+}
+
+.light-theme:not(.store-space) .settings-tabs button.active,
+.light-theme:not(.store-space) .settings-tabs button:hover {
+  background: #ead7c0;
+  color: #241f19;
+}
+
+.light-theme:not(.store-space) .settings-panel,
+.light-theme:not(.store-space) .metadata-summary {
+  background: linear-gradient(180deg, #fffaf2 0%, #f7efe4 100%);
+  box-shadow: 0 16px 34px rgb(94 71 43 / 10%);
+}
+
+.light-theme:not(.store-space) .settings-message.warning {
+  border-color: #c69746;
+  color: #765215;
+}
+
+.light-theme:not(.store-space) .settings-message.ready {
+  border-color: #8aae7a;
+  color: #3e6836;
+}
+
+.light-theme:not(.store-space) .plex-section-list button.active {
+  border-color: #b57578;
+  background: #fff0f1;
+}
+
+.light-theme:not(.store-space) .plex-section-list span,
+.light-theme:not(.store-space) .plex-section-list small {
+  color: #6b5f50;
+}
+
+.light-theme:not(.store-space) .plex-section-title-row {
+  color: #241f19;
+}
+
+.light-theme:not(.store-space) .player-bar {
+  background: #fffaf2;
+  border-top-color: #d8c9b6;
+  box-shadow: 0 -10px 26px rgb(94 71 43 / 12%);
+}
+
+.light-theme:not(.store-space) audio {
+  color-scheme: light;
 }
 
 .search-box input,
