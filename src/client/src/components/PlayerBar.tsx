@@ -36,6 +36,23 @@ export function PlayerBar({
   const visibleCurrentTime = playback?.mode === "sample" ? Math.max(0, currentTime - sampleStartSeconds) : currentTime;
   const progressValue = visibleDuration > 0 ? Math.min(visibleDuration, visibleCurrentTime) : 0;
 
+  const persistProgress = (positionSeconds: number, durationSeconds?: number, options: { force?: boolean } = {}) => {
+    if (!book || playback?.mode !== "play" || !Number.isFinite(positionSeconds) || positionSeconds <= 0) {
+      return;
+    }
+
+    const currentSecond = Math.floor(positionSeconds);
+    if (!options.force && currentSecond - lastSavedSecondRef.current < 5) {
+      return;
+    }
+
+    lastSavedSecondRef.current = currentSecond;
+    onProgressUpdate?.(book.id, positionSeconds, durationSeconds);
+    void api.saveProgress(book.id, positionSeconds, durationSeconds).catch(() => {
+      // The local progress bar still updates; the next save attempt can retry the server.
+    });
+  };
+
   useEffect(() => {
     setPlaying(false);
     setCurrentTime(0);
@@ -106,6 +123,30 @@ export function PlayerBar({
     audio.load();
     return () => audio.removeEventListener("loadedmetadata", startPlayback);
   }, [audioSource, playback?.requestId]);
+
+  useEffect(() => {
+    const saveCurrentPosition = () => {
+      const audio = audioRef.current;
+      if (!audio) {
+        return;
+      }
+      persistProgress(audio.currentTime, audio.duration || undefined, { force: true });
+    };
+
+    const saveWhenHidden = () => {
+      if (document.visibilityState === "hidden") {
+        saveCurrentPosition();
+      }
+    };
+
+    window.addEventListener("beforeunload", saveCurrentPosition);
+    document.addEventListener("visibilitychange", saveWhenHidden);
+    return () => {
+      saveCurrentPosition();
+      window.removeEventListener("beforeunload", saveCurrentPosition);
+      document.removeEventListener("visibilitychange", saveWhenHidden);
+    };
+  }, [book?.id, playback?.mode, audioSource]);
 
   const togglePlayback = async () => {
     const audio = audioRef.current;
@@ -232,12 +273,18 @@ export function PlayerBar({
       <audio
         ref={audioRef}
         src={audioSource}
-        onEnded={() => setPlaying(false)}
+        onEnded={(event) => {
+          persistProgress(event.currentTarget.currentTime, event.currentTarget.duration || undefined, { force: true });
+          setPlaying(false);
+        }}
         onLoadedMetadata={(event) => {
           setDuration(event.currentTarget.duration || 0);
           setCurrentTime(event.currentTarget.currentTime || 0);
         }}
-        onPause={() => setPlaying(false)}
+        onPause={(event) => {
+          persistProgress(event.currentTarget.currentTime, event.currentTarget.duration || undefined, { force: true });
+          setPlaying(false);
+        }}
         onPlay={() => setPlaying(true)}
         onTimeUpdate={(event) => {
           const audio = event.currentTarget;
@@ -248,12 +295,7 @@ export function PlayerBar({
             setPlaying(false);
             return;
           }
-          const currentSecond = Math.floor(audio.currentTime);
-          if (playback.mode === "play" && currentSecond > 0 && currentSecond % 15 === 0 && currentSecond !== lastSavedSecondRef.current) {
-            lastSavedSecondRef.current = currentSecond;
-            onProgressUpdate?.(book.id, audio.currentTime, audio.duration || undefined);
-            void api.saveProgress(book.id, audio.currentTime, audio.duration || undefined);
-          }
+          persistProgress(audio.currentTime, audio.duration || undefined);
         }}
       />
     </>
