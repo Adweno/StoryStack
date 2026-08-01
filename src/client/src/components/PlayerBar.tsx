@@ -144,7 +144,7 @@ export function PlayerBar({
   };
 
   if (!book) {
-    return <div className="player-bar muted-player">Choose a book to start listening.</div>;
+    return null;
   }
 
   const renderProgressControl = () => (
