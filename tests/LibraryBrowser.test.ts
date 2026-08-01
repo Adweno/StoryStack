@@ -40,20 +40,18 @@ describe("BookBrowser", () => {
     expect(groups.map((group) => group.label)).toEqual(["Ash Road", "Harbor Lights"]);
   });
 
-  it("groups books by each listed author and genre", () => {
+  it("groups books by each listed author", () => {
     const authorGroups = new BookBrowser(books).browse("author");
-    const genreGroups = new BookBrowser(books).browse("genre");
 
     expect(authorGroups.find((group) => group.label === "Mira Chen")?.books).toHaveLength(2);
     expect(authorGroups.find((group) => group.label === "Sol Reyes")?.books).toHaveLength(1);
-    expect(genreGroups.find((group) => group.label === "Untagged")?.books[0].title).toBe("1979");
   });
 
-  it("filters grouped library results by title, author, series, narrator, and genre", () => {
-    const groups = new BookBrowser(books).browse("genre", "harbor");
+  it("filters grouped library results by title, author, series, narrator, and genre metadata", () => {
+    const groups = new BookBrowser(books).browse("title", "science fiction");
 
-    expect(groups).toHaveLength(2);
-    expect(groups.flatMap((group) => group.books).every((result) => result.title === "Blue Harbor")).toBe(true);
+    expect(groups).toHaveLength(1);
+    expect(groups.flatMap((group) => group.books).every((result) => result.title === "A Quiet Machine")).toBe(true);
   });
 });
 

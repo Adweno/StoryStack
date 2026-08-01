@@ -1,6 +1,6 @@
 import type { Book } from "../types";
 
-export type BookBrowseMode = "title" | "series" | "author" | "genre";
+export type BookBrowseMode = "title" | "series" | "author";
 
 export interface BookBrowseGroup {
   key: string;
@@ -108,7 +108,7 @@ export class BookBrowser {
     if (mode === "author") {
       return this.splitList(book.author || "Unknown Author");
     }
-    return book.genres.length ? book.genres : ["Untagged"];
+    return [];
   }
 
   private splitList(value: string): string[] {
@@ -137,12 +137,6 @@ export class BookBrowser {
       return 1;
     }
     if (right === "Standalone") {
-      return -1;
-    }
-    if (left === "Untagged") {
-      return 1;
-    }
-    if (right === "Untagged") {
       return -1;
     }
     return left.localeCompare(right);

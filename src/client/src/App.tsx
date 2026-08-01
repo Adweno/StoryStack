@@ -13,7 +13,6 @@ import {
   Settings,
   Sparkles,
   Store,
-  Tags,
   Trash2,
   UserRound,
   Users,
@@ -43,7 +42,7 @@ import type {
   PlaybackProgress
 } from "./types";
 
-type View = "home" | "library" | "series" | "authors" | "genres" | "shelves" | "downloads" | "admin";
+type View = "home" | "library" | "series" | "authors" | "shelves" | "downloads" | "admin";
 type Space = "library" | "store";
 type OfflineState = "idle" | "saving" | "saved";
 type SettingsTab = "access" | "catalog";
@@ -942,19 +941,6 @@ export function App() {
                 <Users size={18} />
                 <span>Authors</span>
               </button>
-              <button
-                className={view === "genres" ? "active" : ""}
-                onClick={() => {
-                  navigateToView("genres");
-                  if (space === "store") {
-                    setStoreBrowseMode("genre");
-                    setStoreCategoryKey(undefined);
-                  }
-                }}
-              >
-                <Tags size={18} />
-                <span>Genres</span>
-              </button>
               {space === "library" && (
                 <>
               <button className={view === "shelves" ? "active" : ""} onClick={() => navigateToView("shelves")}>
@@ -1295,7 +1281,7 @@ export function App() {
             onSelect={(book) => selectBook(book, "store")}
             shelves={shelves}
           />
-        ) : space === "library" && (view === "library" || view === "series" || view === "authors" || view === "genres") ? (
+        ) : space === "library" && (view === "library" || view === "series" || view === "authors") ? (
           <BookCollectionBrowser
             books={libraryBooks}
             browseMode={effectiveLibraryBrowseMode}
@@ -1883,8 +1869,7 @@ function StoreDashboard({
     const browser = new BookBrowser(books);
     return {
       authors: browser.browse("author").length,
-      series: browser.browse("series").length,
-      genres: browser.browse("genre").length
+      series: browser.browse("series").length
     };
   }, [books]);
   const featuredBook = useMemo(() => randomBook(books), [books]);
@@ -1892,8 +1877,7 @@ function StoreDashboard({
     () =>
       [
         { title: "Series", mode: "series" as const },
-        { title: "Authors", mode: "author" as const },
-        { title: "Genres", mode: "genre" as const }
+        { title: "Authors", mode: "author" as const }
       ].map((row) => ({ ...row, groups: new BookBrowser(books).browse(row.mode).slice(0, 8) })),
     [books]
   );
@@ -1923,9 +1907,6 @@ function StoreDashboard({
                       </span>
                     )}
                     {featuredBook.publicationYear && <span>{featuredBook.publicationYear}</span>}
-                    {featuredBook.genres.slice(0, 2).map((genre) => (
-                      <span key={genre}>{genre}</span>
-                    ))}
                   </div>
                   {featuredBook.description && <p className="featured-book-description">{cleanDescription(featuredBook.description)}</p>}
                   <div className="featured-book-actions">
@@ -1956,10 +1937,6 @@ function StoreDashboard({
           <span>
             <strong>{storeStats.series}</strong>
             Series
-          </span>
-          <span>
-            <strong>{storeStats.genres}</strong>
-            Genres
           </span>
         </div>
       </section>
@@ -2080,16 +2057,11 @@ function buildDashboardSections(books: Book[]) {
     (book) => book.series ?? book.id
   ).slice(0, 10);
   const authorBooks = uniqueBy(books, (book) => book.author).slice(0, 10);
-  const genreBooks = uniqueBy(
-    books.filter((book) => book.genres.length),
-    (book) => book.genres[0] ?? book.id
-  ).slice(0, 10);
 
   return [
     { title: "Recently Added", books: recentlyAdded },
     { title: "Recent Series", books: seriesBooks },
-    { title: "Authors", books: authorBooks },
-    { title: "Genres", books: genreBooks }
+    { title: "Authors", books: authorBooks }
   ].filter((section) => section.books.length > 0);
 }
 
@@ -2370,8 +2342,7 @@ function labelForMode(mode: BookBrowseMode): string {
   return {
     title: "Books",
     series: "Series",
-    author: "Authors",
-    genre: "Genres"
+    author: "Authors"
   }[mode];
 }
 
@@ -2382,9 +2353,6 @@ function browseModeForView(view: View, fallback: BookBrowseMode): BookBrowseMode
   if (view === "authors") {
     return "author";
   }
-  if (view === "genres") {
-    return "genre";
-  }
   return fallback;
 }
 
@@ -2394,9 +2362,6 @@ function viewForBrowseMode(mode: BookBrowseMode): View {
   }
   if (mode === "author") {
     return "authors";
-  }
-  if (mode === "genre") {
-    return "genres";
   }
   return "library";
 }
@@ -2570,7 +2535,6 @@ function viewTitle(space: Space, view: View): string {
       library: "Store Books",
       series: "Store Series",
       authors: "Store Authors",
-      genres: "Store Genres",
       shelves: "Store",
       downloads: "Store",
       admin: "Collection Settings"
@@ -2582,7 +2546,6 @@ function viewTitle(space: Space, view: View): string {
     library: "Library",
     series: "Series",
     authors: "Authors",
-    genres: "Genres",
     shelves: "Shelves",
     downloads: "Downloads",
     admin: "Admin"
@@ -2596,7 +2559,6 @@ function viewSubtitle(space: Space, view: View, storeCount: number, libraryCount
       library: `${storeCount} available books`,
       series: "Browse Store books by series",
       authors: "Browse Store books by author",
-      genres: "Browse Store books by genre",
       shelves: "Store",
       downloads: "Store",
       admin: "Store catalog and sync controls"
@@ -2608,7 +2570,6 @@ function viewSubtitle(space: Space, view: View, storeCount: number, libraryCount
     library: `${libraryCount} saved books`,
     series: "Browse your saved books by series",
     authors: "Browse your saved books by author",
-    genres: "Browse your saved books by genre",
     shelves: "Personal organization",
     downloads: "Saved to this device",
     admin: "Catalog sync"
