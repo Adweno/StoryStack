@@ -2617,13 +2617,15 @@ audio {
     grid-row: 1;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 9px;
+    gap: 10px;
     min-height: 0;
-    padding: 10px 12px;
+    padding: 12px;
     align-items: center;
   }
 
   .app-brand {
+    grid-column: 1;
+    grid-row: 1;
     min-width: 0;
     font-size: 18px;
     gap: 8px;
@@ -2634,13 +2636,20 @@ audio {
     height: 30px;
   }
 
-  .app-title,
+  .app-title {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
   .topbar-search {
     grid-column: 1 / -1;
+    grid-row: 3;
   }
 
   .app-title h1 {
     font-size: 24px;
+    line-height: 1.05;
   }
 
   .app-title p {
@@ -2658,6 +2667,13 @@ audio {
   .install-button span,
   .settings-button span {
     display: none;
+  }
+
+  .install-button {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+    align-self: center;
   }
 
   .store-button {
@@ -2784,7 +2800,7 @@ audio {
   .topbar-actions {
     min-width: 0;
     margin-left: 0;
-    grid-column: 2 / -1;
+    grid-column: 2;
     grid-row: 1;
     gap: 8px;
     justify-content: end;
@@ -2809,6 +2825,12 @@ audio {
     width: 40px;
     min-width: 40px;
     min-height: 40px;
+  }
+
+  .user-settings-menu {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
   }
 
   .account-panel,
