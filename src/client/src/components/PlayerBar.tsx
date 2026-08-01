@@ -35,6 +35,8 @@ export function PlayerBar({
   const visibleDuration = playback?.mode === "sample" ? sampleDurationSeconds : duration;
   const visibleCurrentTime = playback?.mode === "sample" ? Math.max(0, currentTime - sampleStartSeconds) : currentTime;
   const progressValue = visibleDuration > 0 ? Math.min(visibleDuration, visibleCurrentTime) : 0;
+  const progressPercent = visibleDuration > 0 ? Math.round((progressValue / visibleDuration) * 100) : 0;
+  const timeLeft = Math.max(0, visibleDuration - progressValue);
 
   const persistProgress = (positionSeconds: number, durationSeconds?: number, options: { force?: boolean } = {}) => {
     if (!book || playback?.mode !== "play" || !Number.isFinite(positionSeconds) || positionSeconds <= 0) {
@@ -204,6 +206,19 @@ export function PlayerBar({
     </div>
   );
 
+  const renderProgressStats = () => (
+    <div className="player-progress-stats" aria-label="Playback progress details">
+      <span>
+        <strong>{progressPercent}%</strong>
+        complete
+      </span>
+      <span>
+        <strong>{formatTime(timeLeft)}</strong>
+        left
+      </span>
+    </div>
+  );
+
   return (
     <>
       {expanded && (
@@ -226,6 +241,7 @@ export function PlayerBar({
             )}
           </div>
           {renderProgressControl()}
+          {renderProgressStats()}
           <div className="player-controls expanded-controls">
             <button className="icon-button" onClick={() => skipBy(-15)} title="Back 15 seconds">
               <RotateCcw size={18} />

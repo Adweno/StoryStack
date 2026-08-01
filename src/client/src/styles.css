@@ -2518,6 +2518,31 @@ h1 {
   accent-color: #f6c36a;
 }
 
+.player-progress-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.player-progress-stats span {
+  border: 1px solid #4a4035;
+  border-radius: 8px;
+  background: rgb(16 14 11 / 42%);
+  color: #cbbca4;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.player-progress-stats strong {
+  color: #fff7df;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
 .player-speed-button {
   min-height: 34px;
   white-space: nowrap;
@@ -2595,6 +2620,7 @@ h1 {
 }
 
 .now-playing-panel .player-progress,
+.now-playing-panel .player-progress-stats,
 .now-playing-panel .expanded-controls {
   grid-column: 2;
 }
@@ -2966,8 +2992,13 @@ audio {
   }
 
   .now-playing-panel .player-progress,
+  .now-playing-panel .player-progress-stats,
   .now-playing-panel .expanded-controls {
     grid-column: 1;
+  }
+
+  .now-playing-panel .player-progress-stats {
+    justify-content: center;
   }
 
   .expanded-controls {

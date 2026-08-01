@@ -1,4 +1,4 @@
-const APP_CACHE = "story-stack-app-v2";
+const APP_CACHE = "story-stack-app-v3";
 const OFFLINE_PAGE = "/";
 const APP_ASSETS = [OFFLINE_PAGE, "/manifest.webmanifest", "/pwa-icon-192.png", "/pwa-icon-512.png"];
 

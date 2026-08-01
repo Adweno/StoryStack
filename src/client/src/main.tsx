@@ -11,8 +11,11 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/service-worker.js").catch(() => {
-      // The app still works without install/offline shell support.
-    });
+    navigator.serviceWorker
+      .register("/service-worker.js")
+      .then((registration) => registration.update())
+      .catch(() => {
+        // The app still works without install/offline shell support.
+      });
   });
 }
