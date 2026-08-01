@@ -78,7 +78,15 @@ export class AppServer {
     this.app.use(express.json({ limit: "1mb" }));
     const staticPath = path.resolve("dist/client");
     if (existsSync(staticPath)) {
-      this.app.use(express.static(staticPath));
+      this.app.use(
+        express.static(staticPath, {
+          setHeaders: (response, filePath) => {
+            if (filePath.endsWith("service-worker.js") || filePath.endsWith("manifest.webmanifest")) {
+              response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+            }
+          }
+        })
+      );
     }
   }
 

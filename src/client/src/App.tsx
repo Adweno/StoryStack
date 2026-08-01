@@ -960,6 +960,18 @@ export function App() {
       </aside>
 
       <section className="workspace">
+        {installActionVisible && (
+          <section className="mobile-install-card" aria-label="Install Story Stack">
+            <div>
+              <strong>Install Story Stack</strong>
+              <span>Add it to your phone for a cleaner app view and offline listening.</span>
+            </div>
+            <button className="install-button" onClick={() => void installApp()}>
+              <Download size={17} />
+              <span>Install</span>
+            </button>
+          </section>
+        )}
         {selectedBook ? (
           <BookDetailPage
             book={selectedBook}

@@ -587,6 +587,10 @@ h1 {
   top: 10px;
 }
 
+.mobile-install-card {
+  display: none;
+}
+
 .store-button.active,
 .store-button:hover {
   background: #8c4d57;
@@ -2732,6 +2736,40 @@ audio {
     grid-column: 1;
     grid-row: 2;
     padding: 18px 12px 24px;
+  }
+
+  .mobile-install-card {
+    border: 1px solid #31504d;
+    background: #182724;
+    color: #dce8de;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .mobile-install-card div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .mobile-install-card strong {
+    color: #fff7df;
+    font-size: 15px;
+  }
+
+  .mobile-install-card span {
+    color: #b9cac1;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .mobile-install-card .install-button {
+    flex: 0 0 auto;
   }
 
   .home-dashboard {
