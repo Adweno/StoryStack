@@ -107,6 +107,7 @@ export function BookCard({
 
   const closeMenu = () => setMenuOpen(false);
   const downloadProgress = typeof offlineProgress === "number" ? Math.max(0, Math.min(100, offlineProgress)) : undefined;
+  const isFinished = variant === "library" && playbackProgressPercent !== undefined && playbackProgressPercent >= 100;
 
   return (
     <article className="book-card">
@@ -118,6 +119,11 @@ export function BookCard({
             style={{ "--listening-progress": Math.max(2, Math.min(100, playbackProgressPercent)) } as CSSProperties}
             aria-hidden="true"
           />
+        )}
+        {isFinished && (
+          <span className="cover-finished-badge" title="Finished" aria-label="Finished">
+            <Check size={15} />
+          </span>
         )}
       </button>
       <div className="book-card-body">
