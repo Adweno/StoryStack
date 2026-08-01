@@ -435,6 +435,21 @@ export function App() {
     }));
   };
 
+  const markBookFinished = async (book: Book) => {
+    const durationSeconds = playbackProgressByBookId[book.id]?.durationSeconds ?? book.durationSeconds ?? 1;
+    await api.saveProgress(book.id, durationSeconds, durationSeconds);
+    updatePlaybackProgress(book.id, durationSeconds, durationSeconds);
+  };
+
+  const clearBookProgress = async (book: Book) => {
+    await api.saveProgress(book.id, 0);
+    setPlaybackProgressByBookId((current) => {
+      const next = { ...current };
+      delete next[book.id];
+      return next;
+    });
+  };
+
   const saveOffline = async (book: Book) => {
     setSavingOfflineBookIds((current) => new Set(current).add(book.id));
     setOfflineProgressByBookId((current) => ({ ...current, [book.id]: 0 }));
@@ -1205,6 +1220,8 @@ export function App() {
                 }}
                 onMoveToShelf={moveToShelf}
                 onOfflineSave={saveOffline}
+                onClearProgress={clearBookProgress}
+                onMarkFinished={markBookFinished}
                 offlineProgressFor={offlineProgressFor}
                 offlineStateFor={offlineStateFor}
                 playbackProgressFor={playbackProgressFor}
@@ -1244,6 +1261,8 @@ export function App() {
             onAdd={addToLibrary}
             onMoveToShelf={moveToShelf}
             onOfflineSave={saveOffline}
+            onClearProgress={clearBookProgress}
+            onMarkFinished={markBookFinished}
             offlineProgressFor={offlineProgressFor}
             offlineStateFor={offlineStateFor}
             playbackProgressFor={playbackProgressFor}
@@ -1294,6 +1313,8 @@ export function App() {
             onCategoryChange={setLibraryCategoryKey}
             onMoveToShelf={moveToShelf}
             onOfflineSave={saveOffline}
+            onClearProgress={clearBookProgress}
+            onMarkFinished={markBookFinished}
             offlineProgressFor={offlineProgressFor}
             offlineStateFor={offlineStateFor}
             playbackProgressFor={playbackProgressFor}
@@ -1770,6 +1791,8 @@ function HomeDashboard({
   emptyText,
   inLibraryIds,
   onAdd,
+  onClearProgress,
+  onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
   offlineProgressFor,
@@ -1787,6 +1810,8 @@ function HomeDashboard({
   emptyText: string;
   inLibraryIds: Set<string>;
   onAdd: (book: Book) => Promise<void>;
+  onClearProgress: (book: Book) => Promise<void>;
+  onMarkFinished: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
   offlineProgressFor: (book: Book) => number | undefined;
@@ -1823,6 +1848,8 @@ function HomeDashboard({
           books={section.books}
           inLibraryIds={inLibraryIds}
           onAdd={onAdd}
+          onClearProgress={onClearProgress}
+          onMarkFinished={onMarkFinished}
           onMoveToShelf={onMoveToShelf}
           onOfflineSave={onOfflineSave}
           offlineProgressFor={offlineProgressFor}
@@ -1994,6 +2021,8 @@ function DashboardRow({
   books,
   inLibraryIds,
   onAdd,
+  onClearProgress,
+  onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
   offlineProgressFor,
@@ -2009,6 +2038,8 @@ function DashboardRow({
   books: Book[];
   inLibraryIds: Set<string>;
   onAdd: (book: Book) => Promise<void>;
+  onClearProgress?: (book: Book) => Promise<void>;
+  onMarkFinished?: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave?: (book: Book) => Promise<void>;
   offlineProgressFor?: (book: Book) => number | undefined;
@@ -2033,6 +2064,8 @@ function DashboardRow({
             book={book}
             inLibrary={inLibraryIds.has(book.id) || Boolean(book.inLibrary)}
             onAdd={() => void onAdd(book)}
+            onClearProgress={variant === "library" && onClearProgress ? () => void onClearProgress(book) : undefined}
+            onMarkFinished={variant === "library" && onMarkFinished ? () => void onMarkFinished(book) : undefined}
             onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
             onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
             offlineProgress={offlineProgressFor?.(book)}
@@ -2089,6 +2122,8 @@ function BookCollectionBrowser({
   onAdd,
   onAddGroup,
   onCategoryChange,
+  onClearProgress,
+  onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
   offlineProgressFor,
@@ -2110,6 +2145,8 @@ function BookCollectionBrowser({
   onAdd: (book: Book) => Promise<void>;
   onAddGroup?: (books: Book[]) => Promise<void>;
   onCategoryChange: (key?: string) => void;
+  onClearProgress?: (book: Book) => Promise<void>;
+  onMarkFinished?: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave?: (book: Book) => Promise<void>;
   offlineProgressFor?: (book: Book) => number | undefined;
@@ -2185,6 +2222,8 @@ function BookCollectionBrowser({
                 book={book}
                 inLibrary={inLibraryIds.has(book.id) || Boolean(book.inLibrary)}
                 onAdd={() => void onAdd(book)}
+                onClearProgress={variant === "library" && onClearProgress ? () => void onClearProgress(book) : undefined}
+                onMarkFinished={variant === "library" && onMarkFinished ? () => void onMarkFinished(book) : undefined}
                 onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
                 onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
                 offlineProgress={offlineProgressFor?.(book)}
@@ -2424,6 +2463,8 @@ function ShelfBookBrowser({
   inLibraryIds,
   onAdd,
   onBack,
+  onClearProgress,
+  onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
   offlineProgressFor,
@@ -2439,6 +2480,8 @@ function ShelfBookBrowser({
   inLibraryIds: Set<string>;
   onAdd: (book: Book) => Promise<void>;
   onBack: () => void;
+  onClearProgress: (book: Book) => Promise<void>;
+  onMarkFinished: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
   offlineProgressFor: (book: Book) => number | undefined;
@@ -2469,6 +2512,8 @@ function ShelfBookBrowser({
               book={book}
               inLibrary={inLibraryIds.has(book.id) || Boolean(book.inLibrary)}
               onAdd={() => void onAdd(book)}
+              onClearProgress={() => void onClearProgress(book)}
+              onMarkFinished={() => void onMarkFinished(book)}
               onMoveToShelf={(targetShelf) => void onMoveToShelf(book, targetShelf)}
               onOfflineSave={() => void onOfflineSave(book)}
               offlineProgress={offlineProgressFor(book)}

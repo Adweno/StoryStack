@@ -1,4 +1,4 @@
-import { Check, Download, MoreVertical, Play, Plus, Trash2, Volume2 } from "lucide-react";
+import { Check, CheckCircle2, Download, MoreVertical, Play, Plus, RotateCcw, Trash2, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -11,6 +11,8 @@ export function BookCard({
   onAdd,
   onMoveToShelf,
   onOfflineSave,
+  onClearProgress,
+  onMarkFinished,
   offlineProgress,
   offlineState = "idle",
   onRemove,
@@ -25,6 +27,8 @@ export function BookCard({
   onAdd: () => void;
   onMoveToShelf?: (shelf: Shelf) => void;
   onOfflineSave?: () => void;
+  onClearProgress?: () => void;
+  onMarkFinished?: () => void;
   offlineProgress?: number;
   offlineState?: "idle" | "saving" | "saved";
   onRemove: () => void;
@@ -68,6 +72,16 @@ export function BookCard({
 
   const remove = () => {
     onRemove();
+    setMenuOpen(false);
+  };
+
+  const markFinished = () => {
+    onMarkFinished?.();
+    setMenuOpen(false);
+  };
+
+  const clearProgress = () => {
+    onClearProgress?.();
     setMenuOpen(false);
   };
 
@@ -161,6 +175,8 @@ export function BookCard({
                 createPortal(
                   <BookMenuPanel
                     menuPanelRef={menuPanelRef}
+                    clearProgress={variant === "library" ? clearProgress : undefined}
+                    markFinished={variant === "library" ? markFinished : undefined}
                     moveToShelf={moveToShelf}
                     position={menuPosition}
                     remove={remove}
@@ -199,12 +215,16 @@ function DownloadProgressRing({ progress }: { progress?: number }) {
 }
 
 function BookMenuPanel({
+  clearProgress,
+  markFinished,
   menuPanelRef,
   moveToShelf,
   position,
   remove,
   shelves
 }: {
+  clearProgress?: () => void;
+  markFinished?: () => void;
   menuPanelRef: RefObject<HTMLDivElement | null>;
   moveToShelf: (shelf: Shelf) => void;
   position: MenuPosition;
@@ -221,6 +241,18 @@ function BookMenuPanel({
         transform: position.placement === "above" ? "translateY(-100%)" : undefined
       }}
     >
+      {markFinished && (
+        <button onClick={markFinished}>
+          <CheckCircle2 size={15} />
+          Mark as Finished
+        </button>
+      )}
+      {clearProgress && (
+        <button onClick={clearProgress}>
+          <RotateCcw size={15} />
+          Clear Progress
+        </button>
+      )}
       <button onClick={remove}>
         <Trash2 size={15} />
         Remove from Library
