@@ -123,6 +123,38 @@ Plex integration is optional. Story Stack can be used without Plex for login, sh
 
 Story Stack should run beside Plex or any other media tooling, not inside it. Install it on the server machine, point it at the audiobook folder, and expose port `4100` on your home network or through HTTPS.
 
+### Current Live Deployment
+
+The public Story Stack app at `https://app.storystacknott.com` is served from the Linux Plex server through Cloudflare Tunnel.
+
+Current setup:
+
+```text
+Server: 192.168.1.234
+SSH user: adweno
+Project path: /home/adweno/story-stack/app
+Docker app container: story-stack
+Cloudflare tunnel container: story-stack-tunnel
+Public URL: https://app.storystacknott.com
+Local app port: 4100
+```
+
+After changing the web/PWA app locally, push or copy the updated files to the server and rebuild the Docker app:
+
+```bash
+cd /home/adweno/story-stack/app
+docker compose up -d --build story-stack
+```
+
+Then verify the public app is serving the new build:
+
+```bash
+curl https://app.storystacknott.com/api/health
+curl https://app.storystacknott.com/service-worker.js
+```
+
+For PWA changes, bump the cache name in `src/client/public/service-worker.js`. Installed phone apps can keep an older service worker until the public server serves a newer one.
+
 ### Docker Compose
 
 The included `docker-compose.yml` is set up for this Linux audiobook path:
@@ -134,7 +166,7 @@ The included `docker-compose.yml` is set up for this Linux audiobook path:
 Run on the Plex/Linux server:
 
 ```bash
-cd /srv/story-stack/app
+cd /home/adweno/story-stack/app
 docker compose up -d --build
 ```
 

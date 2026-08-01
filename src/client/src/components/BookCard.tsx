@@ -15,6 +15,7 @@ export function BookCard({
   onMarkFinished,
   offlineProgress,
   offlineState = "idle",
+  onOfflineRemove,
   onRemove,
   onPlay,
   onSelect,
@@ -31,7 +32,8 @@ export function BookCard({
   onMarkFinished?: () => void;
   offlineProgress?: number;
   offlineState?: "idle" | "saving" | "saved";
-  onRemove: () => void;
+  onOfflineRemove?: () => void;
+  onRemove?: () => void;
   onPlay: () => void;
   onSelect: () => void;
   playbackProgressPercent?: number;
@@ -71,7 +73,12 @@ export function BookCard({
   };
 
   const remove = () => {
-    onRemove();
+    onRemove?.();
+    setMenuOpen(false);
+  };
+
+  const removeOffline = () => {
+    onOfflineRemove?.();
     setMenuOpen(false);
   };
 
@@ -184,8 +191,9 @@ export function BookCard({
                     clearProgress={variant === "library" ? clearProgress : undefined}
                     markFinished={variant === "library" ? markFinished : undefined}
                     moveToShelf={moveToShelf}
+                    removeOffline={onOfflineRemove ? removeOffline : undefined}
                     position={menuPosition}
-                    remove={remove}
+                    remove={onRemove ? remove : undefined}
                     shelves={shelves}
                   />,
                   document.body
@@ -226,6 +234,7 @@ function BookMenuPanel({
   menuPanelRef,
   moveToShelf,
   position,
+  removeOffline,
   remove,
   shelves
 }: {
@@ -234,7 +243,8 @@ function BookMenuPanel({
   menuPanelRef: RefObject<HTMLDivElement | null>;
   moveToShelf: (shelf: Shelf) => void;
   position: MenuPosition;
-  remove: () => void;
+  removeOffline?: () => void;
+  remove?: () => void;
   shelves: Shelf[];
 }) {
   return (
@@ -259,10 +269,18 @@ function BookMenuPanel({
           Clear Progress
         </button>
       )}
-      <button onClick={remove}>
-        <Trash2 size={15} />
-        Remove from Library
-      </button>
+      {removeOffline && (
+        <button onClick={removeOffline}>
+          <Download size={15} />
+          Remove from Local Storage
+        </button>
+      )}
+      {remove && (
+        <button onClick={remove}>
+          <Trash2 size={15} />
+          Remove from Library
+        </button>
+      )}
       <div className="book-menu-section">
         <span>Move to shelf</span>
         {shelves.length > 0 ? (

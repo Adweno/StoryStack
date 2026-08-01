@@ -1248,6 +1248,8 @@ export function App() {
         ) : space === "library" && view === "downloads" ? (
           <DownloadsBrowser
             books={downloadedBooks}
+            onClearProgress={clearBookProgress}
+            onMarkFinished={markBookFinished}
             onPlay={(book) => startPlayback(book, "play")}
             playbackProgressFor={playbackProgressFor}
             onRemove={(book) => void removeOffline(book)}
@@ -2407,12 +2409,16 @@ function viewForBrowseMode(mode: BookBrowseMode): View {
 
 function DownloadsBrowser({
   books,
+  onClearProgress,
+  onMarkFinished,
   onPlay,
   onRemove,
   onSelect,
   playbackProgressFor
 }: {
   books: Book[];
+  onClearProgress: (book: Book) => Promise<void>;
+  onMarkFinished: (book: Book) => Promise<void>;
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => void;
   onSelect: (book: Book) => void;
@@ -2426,32 +2432,19 @@ function DownloadsBrowser({
     <section className="book-group">
       <div className="book-grid">
         {books.map((book) => (
-          <article className="book-card download-card" key={book.id}>
-            <button className="cover-button" onClick={() => onSelect(book)} aria-label={`Open ${book.title}`}>
-              <BookCover book={book} />
-              {playbackProgressFor?.(book) !== undefined && (
-                <span
-                  className="cover-listening-progress"
-                  style={{ "--listening-progress": Math.max(2, Math.min(100, playbackProgressFor(book) ?? 0)) } as CSSProperties}
-                  aria-hidden="true"
-                />
-              )}
-            </button>
-            <div className="book-card-body">
-              <button className="plain-title" onClick={() => onSelect(book)}>
-                {book.title}
-              </button>
-              <p>{book.author}</p>
-              <div className="book-actions">
-                <button className="icon-button" onClick={() => onPlay(book)} title="Play">
-                  <Play size={17} />
-                </button>
-                <button className="icon-button" onClick={() => onRemove(book)} title="Remove download">
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
-          </article>
+          <BookCard
+            key={book.id}
+            book={book}
+            inLibrary
+            onAdd={() => undefined}
+            onClearProgress={() => void onClearProgress(book)}
+            onMarkFinished={() => void onMarkFinished(book)}
+            onOfflineRemove={() => onRemove(book)}
+            onPlay={() => onPlay(book)}
+            onSelect={() => onSelect(book)}
+            playbackProgressPercent={playbackProgressFor?.(book)}
+            variant="library"
+          />
         ))}
       </div>
     </section>
