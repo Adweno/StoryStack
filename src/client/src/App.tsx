@@ -749,17 +749,17 @@ export function App() {
           <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
-        {installActionVisible && (
-          <button className="install-button" onClick={() => void installApp()}>
-            <Download size={18} />
-            <span>Install App</span>
-          </button>
-        )}
         <label className="search-box topbar-search">
           <Search size={18} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search books, authors, narrators" />
         </label>
         <div className="topbar-actions">
+          {installActionVisible && (
+            <button className="install-button" onClick={() => void installApp()} title="Install app">
+              <Download size={18} />
+              <span>Install App</span>
+            </button>
+          )}
           {!offlineOnly && (
             <button
               className={space === "store" ? "store-button active" : "store-button"}

@@ -2609,10 +2609,10 @@ audio {
     grid-column: 1;
     grid-row: 1;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 10px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px 10px;
     min-height: 0;
-    padding: 12px;
+    padding: 10px 12px;
     align-items: center;
   }
 
@@ -2620,69 +2620,56 @@ audio {
     grid-column: 1;
     grid-row: 1;
     min-width: 0;
-    font-size: 18px;
-    gap: 8px;
+    font-size: 0;
+    gap: 0;
   }
 
   .brand-logo {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
   }
 
   .app-title {
-    grid-column: 1;
-    grid-row: 2;
+    grid-column: 2;
+    grid-row: 1;
     min-width: 0;
   }
 
   .topbar-search {
     grid-column: 1 / -1;
-    grid-row: 3;
+    grid-row: 2;
   }
 
   .app-title h1 {
-    font-size: 24px;
+    font-size: 22px;
     line-height: 1.05;
   }
 
   .app-title p {
-    font-size: 14px;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .install-button,
+  .store-button,
+  .account-button,
+  .user-settings-button,
   .settings-button {
-    min-width: 42px;
-    width: 42px;
+    min-width: 38px;
+    width: 38px;
+    min-height: 38px;
     padding: 0;
     justify-content: center;
   }
 
   .install-button span,
+  .store-button span,
+  .account-button span,
   .settings-button span {
     display: none;
-  }
-
-  .install-button {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: end;
-    align-self: center;
-  }
-
-  .store-button {
-    min-height: 40px;
-    padding: 0 11px;
-  }
-
-  .account-button {
-    min-height: 40px;
-    padding: 0 10px;
-  }
-
-  .account-button span {
-    max-width: 72px;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .sidebar {
@@ -2793,16 +2780,17 @@ audio {
   .topbar-actions {
     min-width: 0;
     margin-left: 0;
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 1;
-    gap: 8px;
+    gap: 6px;
     justify-content: end;
     flex-wrap: nowrap;
   }
 
   .search-box {
     min-width: 100%;
-    min-height: 40px;
+    min-height: 38px;
+    border-radius: 8px;
   }
 
   .topbar-search {
@@ -2815,15 +2803,13 @@ audio {
   }
 
   .user-settings-button {
-    width: 40px;
-    min-width: 40px;
-    min-height: 40px;
+    width: 38px;
+    min-width: 38px;
+    min-height: 38px;
   }
 
   .user-settings-menu {
-    grid-column: 3;
-    grid-row: 1;
-    justify-self: end;
+    flex: 0 0 auto;
   }
 
   .account-panel,
