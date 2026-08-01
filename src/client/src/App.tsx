@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   ArrowLeft,
   BookMarked,
@@ -38,7 +39,8 @@ import type {
   SyncResult,
   User,
   UserInvite,
-  BookReview
+  BookReview,
+  PlaybackProgress
 } from "./types";
 
 type View = "home" | "library" | "series" | "authors" | "genres" | "shelves" | "downloads" | "admin";
@@ -73,6 +75,7 @@ export function App() {
   const [loginMessage, setLoginMessage] = useState("");
   const [storeBooks, setStoreBooks] = useState<Book[]>([]);
   const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
+  const [playbackProgressByBookId, setPlaybackProgressByBookId] = useState<Record<string, PlaybackProgress>>({});
   const [cachedOfflineBooks, setCachedOfflineBooks] = useState<Book[]>([]);
   const [offlineBookIds, setOfflineBookIds] = useState<Set<string>>(new Set());
   const [savingOfflineBookIds, setSavingOfflineBookIds] = useState<Set<string>>(new Set());
@@ -126,6 +129,7 @@ export function App() {
   const [userSettingsMessage, setUserSettingsMessage] = useState("");
 
   const libraryIds = useMemo(() => new Set(libraryBooks.map((book) => book.id)), [libraryBooks]);
+  const playbackProgressFor = (book: Book): number | undefined => progressPercentForBook(book, playbackProgressByBookId[book.id]);
   const downloadedBookSource = useMemo(() => {
     const booksById = new Map<string, Book>();
     cachedOfflineBooks.forEach((book) => booksById.set(book.id, book));
@@ -237,6 +241,7 @@ export function App() {
       setUser(me);
       setStoreBooks(store);
       setLibraryBooks(library.books);
+      setPlaybackProgressByBookId(indexProgressByBookId(library.progress));
       setCachedOfflineBooks(await offlineCache.listBooks());
       setShelves(shelfList);
       if (selectedShelf) {
@@ -250,6 +255,7 @@ export function App() {
         setUser(readLastUser() ?? { id: "offline", name: "Offline", role: "user", status: "active", theme: "dark", reviewsEnabled: true });
         setStoreBooks([]);
         setLibraryBooks([]);
+        setPlaybackProgressByBookId({});
         setCachedOfflineBooks(cachedBooks);
         setShelves([]);
         setSelectedShelf(undefined);
@@ -262,6 +268,7 @@ export function App() {
       setOfflineOnly(false);
       setStoreBooks([]);
       setLibraryBooks([]);
+      setPlaybackProgressByBookId({});
       setCachedOfflineBooks([]);
       setShelves([]);
       setSelectedShelf(undefined);
@@ -410,7 +417,23 @@ export function App() {
   };
 
   const startPlayback = (book: Book, mode: PlaybackRequest["mode"]) => {
-    setPlayback({ book, mode, requestId: Date.now() });
+    const savedProgress = playbackProgressByBookId[book.id];
+    const startSeconds = mode === "play" && savedProgress?.status !== "finished" ? savedProgress?.positionSeconds : undefined;
+    setPlayback({ book, mode, requestId: Date.now(), startSeconds });
+  };
+
+  const updatePlaybackProgress = (bookId: string, positionSeconds: number, durationSeconds?: number) => {
+    setPlaybackProgressByBookId((current) => ({
+      ...current,
+      [bookId]: {
+        bookId,
+        userId: user?.id ?? "",
+        positionSeconds,
+        durationSeconds,
+        status: listeningStatusFor(positionSeconds, durationSeconds),
+        updatedAt: new Date().toISOString()
+      }
+    }));
   };
 
   const saveOffline = async (book: Book) => {
@@ -1198,6 +1221,7 @@ export function App() {
                 onOfflineSave={saveOffline}
                 offlineProgressFor={offlineProgressFor}
                 offlineStateFor={offlineStateFor}
+                playbackProgressFor={playbackProgressFor}
                 onPlay={(book) => startPlayback(book, "play")}
                 onRemove={removeFromLibrary}
                 onSelect={(book) => selectBook(book, "library")}
@@ -1222,6 +1246,7 @@ export function App() {
           <DownloadsBrowser
             books={downloadedBooks}
             onPlay={(book) => startPlayback(book, "play")}
+            playbackProgressFor={playbackProgressFor}
             onRemove={(book) => void removeOffline(book)}
             onSelect={(book) => selectBook(book, "library")}
           />
@@ -1235,6 +1260,7 @@ export function App() {
             onOfflineSave={saveOffline}
             offlineProgressFor={offlineProgressFor}
             offlineStateFor={offlineStateFor}
+            playbackProgressFor={playbackProgressFor}
             onOpenStore={() => {
               setSpace("store");
               setView("home");
@@ -1284,6 +1310,7 @@ export function App() {
             onOfflineSave={saveOffline}
             offlineProgressFor={offlineProgressFor}
             offlineStateFor={offlineStateFor}
+            playbackProgressFor={playbackProgressFor}
             onPlay={(book) => startPlayback(book, "play")}
             onRemove={removeFromLibrary}
             onRemoveGroup={removeBooksFromLibrary}
@@ -1312,7 +1339,7 @@ export function App() {
         )}
       </section>
 
-      <PlayerBar playback={playback} api={api} />
+      <PlayerBar playback={playback} api={api} onProgressUpdate={updatePlaybackProgress} />
     </main>
   );
 }
@@ -1765,6 +1792,7 @@ function HomeDashboard({
   onPlay,
   onRemove,
   onSelect,
+  playbackProgressFor,
   shelves,
   title,
   variant = "library"
@@ -1781,6 +1809,7 @@ function HomeDashboard({
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => Promise<void>;
   onSelect: (book: Book) => void;
+  playbackProgressFor: (book: Book) => number | undefined;
   shelves: Shelf[];
   title: string;
   variant?: "library" | "store";
@@ -1815,6 +1844,7 @@ function HomeDashboard({
           onPlay={onPlay}
           onRemove={onRemove}
           onSelect={onSelect}
+          playbackProgressFor={playbackProgressFor}
           shelves={shelves}
           title={section.title}
         />
@@ -1994,6 +2024,7 @@ function DashboardRow({
   onPlay,
   onRemove,
   onSelect,
+  playbackProgressFor,
   shelves,
   title,
   variant = "library"
@@ -2008,6 +2039,7 @@ function DashboardRow({
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => Promise<void>;
   onSelect: (book: Book) => void;
+  playbackProgressFor?: (book: Book) => number | undefined;
   shelves: Shelf[];
   title: string;
   variant?: "library" | "store";
@@ -2031,6 +2063,7 @@ function DashboardRow({
             onRemove={() => void onRemove(book)}
             onPlay={() => onPlay(book)}
             onSelect={() => onSelect(book)}
+            playbackProgressPercent={playbackProgressFor?.(book)}
             shelves={shelves}
             variant={variant}
           />
@@ -2092,6 +2125,7 @@ function BookCollectionBrowser({
   onRemove,
   onRemoveGroup,
   onSelect,
+  playbackProgressFor,
   shelves,
   variant
 }: {
@@ -2112,6 +2146,7 @@ function BookCollectionBrowser({
   onRemove: (book: Book) => Promise<void>;
   onRemoveGroup?: (books: Book[]) => Promise<void>;
   onSelect: (book: Book) => void;
+  playbackProgressFor?: (book: Book) => number | undefined;
   shelves: Shelf[];
   variant: "library" | "store";
 }) {
@@ -2185,6 +2220,7 @@ function BookCollectionBrowser({
                 onRemove={() => void onRemove(book)}
                 onPlay={() => onPlay(book)}
                 onSelect={() => onSelect(book)}
+                playbackProgressPercent={playbackProgressFor?.(book)}
                 shelves={shelves}
                 variant={variant}
               />
@@ -2369,12 +2405,14 @@ function DownloadsBrowser({
   books,
   onPlay,
   onRemove,
-  onSelect
+  onSelect,
+  playbackProgressFor
 }: {
   books: Book[];
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => void;
   onSelect: (book: Book) => void;
+  playbackProgressFor?: (book: Book) => number | undefined;
 }) {
   if (books.length === 0) {
     return <div className="empty-state">No books have been saved to this device yet.</div>;
@@ -2387,6 +2425,13 @@ function DownloadsBrowser({
           <article className="book-card download-card" key={book.id}>
             <button className="cover-button" onClick={() => onSelect(book)} aria-label={`Open ${book.title}`}>
               <BookCover book={book} />
+              {playbackProgressFor?.(book) !== undefined && (
+                <span
+                  className="cover-listening-progress"
+                  style={{ "--listening-progress": Math.max(2, Math.min(100, playbackProgressFor(book) ?? 0)) } as CSSProperties}
+                  aria-hidden="true"
+                />
+              )}
             </button>
             <div className="book-card-body">
               <button className="plain-title" onClick={() => onSelect(book)}>
@@ -2421,6 +2466,7 @@ function ShelfBookBrowser({
   onPlay,
   onRemove,
   onSelect,
+  playbackProgressFor,
   shelf,
   shelves
 }: {
@@ -2435,6 +2481,7 @@ function ShelfBookBrowser({
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => Promise<void>;
   onSelect: (book: Book) => void;
+  playbackProgressFor: (book: Book) => number | undefined;
   shelf: Shelf;
   shelves: Shelf[];
 }) {
@@ -2464,6 +2511,7 @@ function ShelfBookBrowser({
               onRemove={() => void onRemove(book)}
               onPlay={() => onPlay(book)}
               onSelect={() => onSelect(book)}
+              playbackProgressPercent={playbackProgressFor(book)}
               shelves={shelves}
               variant="library"
             />
@@ -2573,6 +2621,31 @@ function matchesBookQuery(book: Book, query: string): boolean {
     return true;
   }
   return [book.title, book.author, book.narrator, book.series, ...book.genres].some((field) => field?.toLowerCase().includes(value));
+}
+
+function indexProgressByBookId(progress: PlaybackProgress[]): Record<string, PlaybackProgress> {
+  return Object.fromEntries(progress.map((entry) => [entry.bookId, entry]));
+}
+
+function progressPercentForBook(book: Book, progress?: PlaybackProgress): number | undefined {
+  if (!progress || progress.positionSeconds <= 0) {
+    return undefined;
+  }
+  const duration = progress.durationSeconds ?? book.durationSeconds;
+  if (!duration || duration <= 0) {
+    return undefined;
+  }
+  if (progress.status === "finished") {
+    return 100;
+  }
+  return Math.max(1, Math.min(99, (progress.positionSeconds / duration) * 100));
+}
+
+function listeningStatusFor(positionSeconds: number, durationSeconds?: number): PlaybackProgress["status"] {
+  if (durationSeconds && durationSeconds > 0 && positionSeconds >= durationSeconds * 0.95) {
+    return "finished";
+  }
+  return positionSeconds > 0 ? "in_progress" : "not_started";
 }
 
 function readLastUser(): User | undefined {

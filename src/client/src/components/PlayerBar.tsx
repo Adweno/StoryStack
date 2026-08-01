@@ -9,9 +9,18 @@ export interface PlaybackRequest {
   book: Book;
   mode: "play" | "sample";
   requestId: number;
+  startSeconds?: number;
 }
 
-export function PlayerBar({ playback, api }: { playback?: PlaybackRequest; api: ApiClient }) {
+export function PlayerBar({
+  playback,
+  api,
+  onProgressUpdate
+}: {
+  playback?: PlaybackRequest;
+  api: ApiClient;
+  onProgressUpdate?: (bookId: string, positionSeconds: number, durationSeconds?: number) => void;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastSavedSecondRef = useRef<number>(-1);
   const [playing, setPlaying] = useState(false);
@@ -79,6 +88,8 @@ export function PlayerBar({ playback, api }: { playback?: PlaybackRequest; api: 
       if (playback.mode === "sample") {
         const fallbackStart = Math.max(0, (audio.duration || sampleStartSeconds + sampleDurationSeconds) - sampleDurationSeconds);
         audio.currentTime = Math.min(sampleStartSeconds, fallbackStart);
+      } else if (playback.startSeconds && playback.startSeconds > 0) {
+        audio.currentTime = Math.min(playback.startSeconds, Math.max(0, (audio.duration || playback.startSeconds) - 1));
       }
       audio.playbackRate = playbackRate;
       setDuration(audio.duration || 0);
@@ -240,6 +251,7 @@ export function PlayerBar({ playback, api }: { playback?: PlaybackRequest; api: 
           const currentSecond = Math.floor(audio.currentTime);
           if (playback.mode === "play" && currentSecond > 0 && currentSecond % 15 === 0 && currentSecond !== lastSavedSecondRef.current) {
             lastSavedSecondRef.current = currentSecond;
+            onProgressUpdate?.(book.id, audio.currentTime, audio.duration || undefined);
             void api.saveProgress(book.id, audio.currentTime, audio.duration || undefined);
           }
         }}

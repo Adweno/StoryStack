@@ -1472,12 +1472,32 @@ h1 {
 
 .cover-button {
   display: block;
+  position: relative;
   width: calc(100% - 20px);
   max-width: 174px;
   aspect-ratio: 1;
   margin: 10px auto 0;
   overflow: hidden;
   border-radius: 7px;
+}
+
+.cover-listening-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  background: rgb(0 0 0 / 48%);
+  box-shadow: 0 -1px 7px rgb(0 0 0 / 38%);
+}
+
+.cover-listening-progress::after {
+  content: "";
+  display: block;
+  width: calc(var(--listening-progress) * 1%);
+  height: 100%;
+  background: #f6c36a;
+  border-radius: 0 999px 999px 0;
 }
 
 .book-cover {

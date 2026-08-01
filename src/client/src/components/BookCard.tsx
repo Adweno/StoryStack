@@ -16,6 +16,7 @@ export function BookCard({
   onRemove,
   onPlay,
   onSelect,
+  playbackProgressPercent,
   shelves = [],
   variant = "library"
 }: {
@@ -29,6 +30,7 @@ export function BookCard({
   onRemove: () => void;
   onPlay: () => void;
   onSelect: () => void;
+  playbackProgressPercent?: number;
   shelves?: Shelf[];
   variant?: "library" | "store";
 }) {
@@ -96,6 +98,13 @@ export function BookCard({
     <article className="book-card">
       <button className="cover-button" onClick={onSelect} aria-label={`Open ${book.title}`}>
         <BookCover book={book} />
+        {playbackProgressPercent !== undefined && playbackProgressPercent > 0 && (
+          <span
+            className="cover-listening-progress"
+            style={{ "--listening-progress": Math.max(2, Math.min(100, playbackProgressPercent)) } as CSSProperties}
+            aria-hidden="true"
+          />
+        )}
       </button>
       <div className="book-card-body">
         <button className="plain-title" onClick={onSelect}>
