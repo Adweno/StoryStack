@@ -1,6 +1,7 @@
 {
   "name": "Story Stack",
   "short_name": "Story Stack",
+  "id": "/",
   "description": "A self-hosted audiobook library for browsing, sharing, and offline listening.",
   "start_url": "/",
   "scope": "/",

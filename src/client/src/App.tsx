@@ -756,7 +756,7 @@ export function App() {
           {installActionVisible && (
             <button className="install-button" onClick={() => void installApp()} title="Install app">
               <Download size={18} />
-              <span>Install App</span>
+              <span>Install</span>
             </button>
           )}
           {!offlineOnly && (
@@ -885,8 +885,9 @@ export function App() {
             <X size={18} />
           </button>
           <strong>Install Story Stack</strong>
-          <p>On iPhone or iPad, tap Share in Safari, then choose Add to Home Screen.</p>
-          <p>On Android, open the browser menu and choose Install app or Add to Home screen.</p>
+          <p>On Android Chrome, tap Install here first. If Chrome does not open the install prompt, open the browser menu and choose Add to Home screen.</p>
+          <p>If Add to Home screen is missing, refresh this page once and try again. Chrome sometimes waits until the offline app shell finishes registering.</p>
+          <p>On iPhone or iPad, open Story Stack in Safari, tap Share, then choose Add to Home Screen.</p>
         </section>
       )}
       <aside className="sidebar">

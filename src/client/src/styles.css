@@ -2665,11 +2665,21 @@ audio {
     justify-content: center;
   }
 
-  .install-button span,
+  .install-button {
+    width: auto;
+    min-width: 86px;
+    padding: 0 10px;
+  }
+
   .store-button span,
   .account-button span,
   .settings-button span {
     display: none;
+  }
+
+  .install-button span {
+    display: inline;
+    font-size: 13px;
   }
 
   .sidebar {
