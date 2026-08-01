@@ -24,6 +24,16 @@ describe("BookBrowser", () => {
     expect(groups.find((group) => group.label === "Standalone")?.books).toHaveLength(2);
   });
 
+  it("orders books inside a series by release year", () => {
+    const groups = new BookBrowser([
+      book({ id: "late", title: "Book Two", author: "Author", series: "Release Order", publicationYear: 2022, seriesOrder: 2 }),
+      book({ id: "missing", title: "Undated", author: "Author", series: "Release Order" }),
+      book({ id: "early", title: "Book One", author: "Author", series: "Release Order", publicationYear: 2018, seriesOrder: 1 })
+    ]).browse("series");
+
+    expect(groups.find((group) => group.label === "Release Order")?.books.map((book) => book.id)).toEqual(["early", "late", "missing"]);
+  });
+
   it("can hide standalone books from Store series browsing", () => {
     const groups = new BookBrowser(books, { includeStandaloneSeries: false }).browse("series");
 

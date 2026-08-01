@@ -25,7 +25,7 @@ export class BookBrowser {
       return this.groupByTitle(filteredBooks);
     }
 
-    return this.groupByValue(filteredBooks, (book) => this.valuesForMode(book, mode));
+    return this.groupByValue(filteredBooks, (book) => this.valuesForMode(book, mode), mode);
   }
 
   private filterBooks(query: string): Book[] {
@@ -56,7 +56,7 @@ export class BookBrowser {
     return this.groupByValue(books, (book) => [this.titleBucket(book.title)]);
   }
 
-  private groupByValue(books: Book[], getValues: (book: Book) => string[]): BookBrowseGroup[] {
+  private groupByValue(books: Book[], getValues: (book: Book) => string[], mode?: Exclude<BookBrowseMode, "title">): BookBrowseGroup[] {
     const groups = new Map<string, Book[]>();
 
     for (const book of books) {
@@ -73,9 +73,29 @@ export class BookBrowser {
       .map(([label, groupBooks]) => ({
         key: label.toLowerCase(),
         label,
-        books: groupBooks.sort((left, right) => left.title.localeCompare(right.title))
+        books: this.sortBooksForMode(groupBooks, mode)
       }))
       .sort((left, right) => this.sortLabels(left.label, right.label));
+  }
+
+  private sortBooksForMode(books: Book[], mode?: Exclude<BookBrowseMode, "title">): Book[] {
+    if (mode === "series") {
+      return books.sort((left, right) => {
+        const leftYear = left.publicationYear ?? Number.POSITIVE_INFINITY;
+        const rightYear = right.publicationYear ?? Number.POSITIVE_INFINITY;
+        if (leftYear !== rightYear) {
+          return leftYear - rightYear;
+        }
+        const leftOrder = left.seriesOrder ?? Number.POSITIVE_INFINITY;
+        const rightOrder = right.seriesOrder ?? Number.POSITIVE_INFINITY;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+        return left.title.localeCompare(right.title);
+      });
+    }
+
+    return books.sort((left, right) => left.title.localeCompare(right.title));
   }
 
   private valuesForMode(book: Book, mode: Exclude<BookBrowseMode, "title">): string[] {
