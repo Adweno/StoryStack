@@ -2,16 +2,14 @@
 
 ## Purpose
 
-Story Stack should become a self-contained audiobook server and client platform that can be installed by regular users, accessed outside the home network, and shared with invited listeners without requiring Plex as the underlying identity or permission system.
-
-Plex may remain an optional integration, but Story Stack should not depend on Plex for core login, remote access, sharing, playback, or downloads.
+Story Stack should be a self-contained audiobook server and client platform that can be installed by regular users, accessed outside the home network, and shared with invited listeners through Story Stack accounts.
 
 ## Product Goals
 
 1. Let an owner access their audiobook library from outside their home network.
 2. Let an owner share selected access with other people.
 3. Make setup approachable for non-technical users on Windows or Linux.
-4. Keep audiobook files read-only and avoid disrupting Audiobookshelf, Plex, or existing folder organization.
+4. Keep audiobook files read-only and avoid disrupting existing folder organization or media tooling.
 5. Provide a clean Store and My Library experience with user-specific shelves, progress, and downloads.
 
 ## Guiding Product Decision
@@ -22,9 +20,9 @@ Story Stack should own the app experience end to end:
 - Story Stack owns sharing and invite flows.
 - Story Stack owns Store visibility, My Library, shelves, and progress.
 - Story Stack serves audiobook playback and downloads directly.
-- Remote access is handled through a supported network exposure option, not through Plex library sharing.
+- Remote access is handled through a supported network exposure option managed by Story Stack.
 
-This reduces setup complexity for shared users because they only need a Story Stack account or invite. They should not need a Plex account unless the owner deliberately enables optional Plex integration.
+This reduces setup complexity for shared users because they only need a Story Stack account or invite.
 
 ## Core User Types
 
@@ -89,8 +87,8 @@ Story Stack should offer a guided remote access setup using one or more supporte
 ### Non-Goals
 
 - Story Stack should not require router port forwarding as the default setup path.
-- Story Stack should not require Plex remote access.
-- Story Stack should not require each listener to be added to the owner's Plex account.
+- Story Stack should not require a separate media-service account for remote access.
+- Story Stack should not require listeners to be added to an external sharing service.
 
 ## Authentication Requirements
 
@@ -108,7 +106,6 @@ Future options:
 
 - Passwordless email login.
 - OAuth providers.
-- Optional Plex login as a convenience integration.
 
 ### Account Requirements
 
@@ -124,7 +121,7 @@ Future options:
 
 ### Invite-Based Sharing
 
-Admins should be able to invite users from Story Stack without managing Plex shares.
+Admins should be able to invite users from Story Stack without managing external media-service shares.
 
 Invite requirements:
 
@@ -253,8 +250,7 @@ For a future public release, the Windows app should be installable by any listen
 They should not need:
 
 - Access to the owner's file system.
-- A Plex account.
-- A Plex library share.
+- Access to the owner's file system.
 - Knowledge of the owner's local IP address.
 
 ## Admin Setup Workflow
@@ -302,27 +298,6 @@ They should not need:
 7. Story Stack activates the user.
 8. Listener lands in My Library or Store.
 
-## Optional Plex Integration
-
-Plex should be optional.
-
-Possible uses:
-
-- Import Plex library section metadata.
-- Match Story Stack books to Plex items.
-- Allow Plex login as an optional authentication provider.
-- Help owners migrate from Plex-managed audiobook libraries.
-
-Plex should not be required for:
-
-- Remote access.
-- Sharing with users.
-- Story Stack login.
-- Store browsing.
-- My Library.
-- Playback.
-- Downloads.
-
 ## Risks and Open Questions
 
 - Remote access setup must be simple enough for non-technical owners.
@@ -335,12 +310,10 @@ Plex should not be required for:
 
 ## MVP Recommendation
 
-The next clean build phase should focus on removing Plex as a core dependency:
+The next clean build phase should focus on making Story Stack fully self-contained:
 
 1. Add native Story Stack authentication.
 2. Add invite-based user sharing.
 3. Add direct authorized audio streaming.
 4. Add Remote Access settings with public URL validation.
-5. Keep Plex integration optional and secondary.
-
-This path best supports a future public release where anyone can install Story Stack, invite listeners, and share an audiobook library without asking those listeners to understand Plex.
+This path best supports a future public release where anyone can install Story Stack, invite listeners, and share an audiobook library without requiring a separate media account.

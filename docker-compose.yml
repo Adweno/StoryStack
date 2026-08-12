@@ -16,13 +16,13 @@ services:
       STORY_STACK_MEDIA_PATH_PREFIX: "/srv/media/audiobooks"
       STORY_STACK_ABS_METADATA_PATH_PREFIX: "/metadata"
       STORY_STACK_METADATA_PATH_PREFIX: "/metadata"
-      STORY_STACK_ADMIN_EMAIL: "adam.w.nott@gmail.com"
+      STORY_STACK_ADMIN_EMAIL: "${STORY_STACK_ADMIN_EMAIL:-}"
       STORY_STACK_ADMIN_PASSWORD: "${STORY_STACK_ADMIN_PASSWORD:-}"
       STORY_STACK_USER_PASSWORD: "${STORY_STACK_USER_PASSWORD:-}"
       STORY_STACK_PUBLIC_URL: "${STORY_STACK_PUBLIC_URL:-}"
     volumes:
       - /srv/story-stack/data:/data
-      - /srv/media/audiobooks/:/srv/media/audiobooks/:ro
+      - ${STORY_STACK_HOST_LIBRARY_PATH:-./media/audiobooks}:/srv/media/audiobooks/:ro
       - /srv/audiobookshelf/config:/abs-config:ro
       - /srv/audiobookshelf/metadata:/metadata:ro
 
@@ -32,6 +32,6 @@ services:
     restart: unless-stopped
     profiles:
       - tunnel
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+    command: tunnel --no-autoupdate --protocol http2 run --token ${CLOUDFLARED_TOKEN}
     depends_on:
       - story-stack

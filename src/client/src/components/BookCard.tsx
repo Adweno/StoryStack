@@ -17,6 +17,7 @@ export function BookCard({
   offlineState = "idle",
   onOfflineRemove,
   onRemove,
+  onRemoveFromShelf,
   onPlay,
   onSelect,
   playbackProgressPercent,
@@ -34,6 +35,7 @@ export function BookCard({
   offlineState?: "idle" | "saving" | "saved";
   onOfflineRemove?: () => void;
   onRemove?: () => void;
+  onRemoveFromShelf?: () => void;
   onPlay: () => void;
   onSelect: () => void;
   playbackProgressPercent?: number;
@@ -74,6 +76,11 @@ export function BookCard({
 
   const remove = () => {
     onRemove?.();
+    setMenuOpen(false);
+  };
+
+  const removeFromShelf = () => {
+    onRemoveFromShelf?.();
     setMenuOpen(false);
   };
 
@@ -171,7 +178,7 @@ export function BookCard({
               <Plus size={16} />
             </button>
           )}
-          {inLibrary && (
+          {variant === "library" && inLibrary && (
             <div className="book-menu">
               <button
                 ref={menuButtonRef}
@@ -194,6 +201,7 @@ export function BookCard({
                     removeOffline={onOfflineRemove ? removeOffline : undefined}
                     position={menuPosition}
                     remove={onRemove ? remove : undefined}
+                    removeFromShelf={onRemoveFromShelf ? removeFromShelf : undefined}
                     shelves={shelves}
                   />,
                   document.body
@@ -236,6 +244,7 @@ function BookMenuPanel({
   position,
   removeOffline,
   remove,
+  removeFromShelf,
   shelves
 }: {
   clearProgress?: () => void;
@@ -245,6 +254,7 @@ function BookMenuPanel({
   position: MenuPosition;
   removeOffline?: () => void;
   remove?: () => void;
+  removeFromShelf?: () => void;
   shelves: Shelf[];
 }) {
   return (
@@ -279,6 +289,12 @@ function BookMenuPanel({
         <button onClick={remove}>
           <Trash2 size={15} />
           Remove from Library
+        </button>
+      )}
+      {removeFromShelf && (
+        <button onClick={removeFromShelf}>
+          <Trash2 size={15} />
+          Remove from Shelf
         </button>
       )}
       <div className="book-menu-section">

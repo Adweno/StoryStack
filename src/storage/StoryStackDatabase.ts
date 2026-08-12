@@ -7,7 +7,6 @@ import type {
   BookReview,
   CatalogSettings,
   PlaybackProgress,
-  PlexSettings,
   RemoteAccessSettings,
   Shelf,
   ShelfBook,
@@ -21,6 +20,8 @@ import type {
 } from "../domain/types";
 import type { LibraryRepository } from "../services/LibraryService";
 import { PasswordHasher } from "../services/PasswordHasher";
+
+const DEFAULT_SHELF_NAME = "Favorites";
 
 export class StoryStackDatabase implements LibraryRepository {
   private readonly database: DatabaseSync;
@@ -36,7 +37,7 @@ export class StoryStackDatabase implements LibraryRepository {
   listUsers(): User[] {
     return (this.database
       .prepare(
-        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users ORDER BY name"
+        "SELECT id, name, role, status, username, email, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled, metadataEditorEnabled FROM users ORDER BY name"
       )
       .all() as unknown as UserRow[]).map((row) => this.toUser(row));
   }
@@ -45,8 +46,8 @@ export class StoryStackDatabase implements LibraryRepository {
     const id = `manual_${input.email.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_")}`;
     this.database
       .prepare(
-        `INSERT INTO users (id, name, role, status, username, email, plexId)
-         VALUES (?, ?, ?, 'active', ?, ?, NULL)
+        `INSERT INTO users (id, name, role, status, username, email)
+         VALUES (?, ?, ?, 'active', ?, ?)
          ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           role = excluded.role,
@@ -104,8 +105,8 @@ export class StoryStackDatabase implements LibraryRepository {
     const hasher = new PasswordHasher();
     this.database
       .prepare(
-        `INSERT INTO users (id, name, role, status, username, passwordHash, email, plexId)
-         VALUES (?, ?, ?, 'active', ?, ?, ?, NULL)
+        `INSERT INTO users (id, name, role, status, username, passwordHash, email)
+         VALUES (?, ?, ?, 'active', ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           role = excluded.role,
@@ -147,6 +148,15 @@ export class StoryStackDatabase implements LibraryRepository {
     return user;
   }
 
+  updateUserMetadataEditorEnabled(userId: string, enabled: boolean): User {
+    this.database.prepare("UPDATE users SET metadataEditorEnabled = ? WHERE id = ?").run(enabled ? 1 : 0, userId);
+    const user = this.getUserById(userId);
+    if (!user) {
+      throw new Error("User was not found.");
+    }
+    return user;
+  }
+
   updateUserPreferences(userId: string, input: { theme: UserTheme; reviewsEnabled: boolean }): User {
     this.database.prepare("UPDATE users SET theme = ?, reviewsEnabled = ? WHERE id = ?").run(input.theme, input.reviewsEnabled ? 1 : 0, userId);
     const user = this.getUserById(userId);
@@ -163,7 +173,7 @@ export class StoryStackDatabase implements LibraryRepository {
   getDefaultUser(): User {
     const row = this.database
       .prepare(
-        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users ORDER BY role LIMIT 1"
+        "SELECT id, name, role, status, username, email, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled, metadataEditorEnabled FROM users ORDER BY role LIMIT 1"
       )
       .get() as UserRow | undefined;
     if (!row) {
@@ -175,7 +185,7 @@ export class StoryStackDatabase implements LibraryRepository {
   getUserById(userId: string): User | undefined {
     const row = this.database
       .prepare(
-        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users WHERE id = ?"
+        "SELECT id, name, role, status, username, email, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled, metadataEditorEnabled FROM users WHERE id = ?"
       )
       .get(userId) as UserRow | undefined;
     return row ? this.toUser(row) : undefined;
@@ -184,7 +194,7 @@ export class StoryStackDatabase implements LibraryRepository {
   getUserCredentials(username: string): UserCredentials | undefined {
     return this.database
       .prepare(
-        "SELECT id, name, role, status, username, email, plexId, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)"
+        "SELECT id, name, role, status, username, email, lastLoginAt, passwordHash, passwordResetRequired, theme, reviewsEnabled, metadataEditorEnabled FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)"
       )
       .get(username, username) as UserCredentials | undefined;
   }
@@ -224,7 +234,7 @@ export class StoryStackDatabase implements LibraryRepository {
   getSessionUser(token: string, now = new Date().toISOString()): User | undefined {
     const row = this.database
       .prepare(
-        `SELECT u.id, u.name, u.role, u.status, u.username, u.email, u.plexId, u.lastLoginAt, u.passwordHash, u.passwordResetRequired, u.theme, u.reviewsEnabled
+        `SELECT u.id, u.name, u.role, u.status, u.username, u.email, u.lastLoginAt, u.passwordHash, u.passwordResetRequired, u.theme, u.reviewsEnabled, u.metadataEditorEnabled
          FROM user_sessions s
          JOIN users u ON u.id = s.userId
          WHERE s.token = ? AND s.expiresAt > ? AND COALESCE(u.status, 'active') = 'active'`
@@ -234,32 +244,6 @@ export class StoryStackDatabase implements LibraryRepository {
       this.database.prepare("DELETE FROM user_sessions WHERE token = ?").run(token);
     }
     return row ? this.toUser(row) : undefined;
-  }
-
-  upsertPlexUser(input: { plexId: string; email: string; name: string; role: "admin" | "user"; plexToken: string }): User {
-    const existing = this.database
-      .prepare("SELECT id FROM users WHERE lower(email) = lower(?) OR plexId = ?")
-      .get(input.email, input.plexId) as { id: string } | undefined;
-    const id = existing?.id ?? `plex_${input.plexId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-    this.database
-      .prepare(
-        `INSERT INTO users (id, name, role, status, username, passwordHash, email, plexId, plexToken)
-         VALUES (?, ?, ?, 'active', ?, NULL, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-          name = excluded.name,
-          role = excluded.role,
-          status = 'active',
-          username = excluded.username,
-          email = excluded.email,
-          plexId = excluded.plexId,
-          plexToken = excluded.plexToken`
-      )
-      .run(id, input.name, input.role, input.email, input.email, input.plexId, input.plexToken);
-    const user = this.getUserById(id);
-    if (!user) {
-      throw new Error("Plex user could not be saved.");
-    }
-    return user;
   }
 
   deleteSession(token: string): void {
@@ -344,8 +328,8 @@ export class StoryStackDatabase implements LibraryRepository {
       .prepare(
         `INSERT INTO books (
           id, sourcePath, title, subtitle, author, narrator, series, seriesOrder, description, genres,
-          durationSeconds, publicationYear, coverPath, audioPath, plexKey, plexPartKey, plexFile, addedAt, hidden
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          durationSeconds, publicationYear, coverPath, audioPath, audioTracks, addedAt, hidden
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           sourcePath = excluded.sourcePath,
           title = excluded.title,
@@ -360,9 +344,7 @@ export class StoryStackDatabase implements LibraryRepository {
           publicationYear = excluded.publicationYear,
           coverPath = excluded.coverPath,
           audioPath = excluded.audioPath,
-          plexKey = COALESCE(books.plexKey, excluded.plexKey),
-          plexPartKey = COALESCE(books.plexPartKey, excluded.plexPartKey),
-          plexFile = COALESCE(books.plexFile, excluded.plexFile),
+          audioTracks = excluded.audioTracks,
           hidden = excluded.hidden`
       )
       .run(
@@ -380,9 +362,7 @@ export class StoryStackDatabase implements LibraryRepository {
         targetBook.publicationYear ?? null,
         targetBook.coverPath ?? null,
         targetBook.audioPath ?? null,
-        targetBook.plexKey ?? null,
-        targetBook.plexPartKey ?? null,
-        targetBook.plexFile ?? null,
+        JSON.stringify(targetBook.audioTracks?.length ? targetBook.audioTracks : targetBook.audioPath ? [{ path: targetBook.audioPath }] : []),
         targetBook.addedAt,
         targetBook.hidden ? 1 : 0
       );
@@ -391,24 +371,6 @@ export class StoryStackDatabase implements LibraryRepository {
 
   setHidden(bookId: string, hidden: boolean): void {
     this.database.prepare("UPDATE books SET hidden = ? WHERE id = ?").run(hidden ? 1 : 0, bookId);
-  }
-
-  getUserPlexToken(userId: string): string | undefined {
-    const row = this.database.prepare("SELECT plexToken FROM users WHERE id = ?").get(userId) as { plexToken?: string | null } | undefined;
-    return row?.plexToken ?? undefined;
-  }
-
-  getPlexSettings(): PlexSettings {
-    return {
-      serverUrl: this.getSetting("plex.serverUrl") ?? process.env.STORY_STACK_PLEX_SERVER_URL ?? "",
-      sectionKey: this.getSetting("plex.sectionKey") ?? process.env.STORY_STACK_PLEX_SECTION_KEY ?? ""
-    };
-  }
-
-  savePlexSettings(settings: PlexSettings): PlexSettings {
-    this.setSetting("plex.serverUrl", settings.serverUrl.replace(/\/$/, ""));
-    this.setSetting("plex.sectionKey", settings.sectionKey);
-    return this.getPlexSettings();
   }
 
   getCatalogSettings(): CatalogSettings {
@@ -435,17 +397,15 @@ export class StoryStackDatabase implements LibraryRepository {
     return this.getRemoteAccessSettings();
   }
 
-  updateBookPlexMatch(bookId: string, match: BookPlexMatch): void {
-    this.database
-      .prepare("UPDATE books SET plexKey = ?, plexPartKey = ?, plexFile = ? WHERE id = ?")
-      .run(match.plexKey, match.plexPartKey, match.plexFile, bookId);
-  }
-
   updateBookMetadata(bookId: string, patch: BookMetadataPatch): void {
     const updates: string[] = [];
     const values: Array<string | number | null> = [];
     for (const [field, value] of Object.entries(patch)) {
-      updates.push(`${field} = ?`);
+      const column = metadataColumnForField(field as keyof BookMetadataPatch);
+      if (!column) {
+        continue;
+      }
+      updates.push(`${column} = ?`);
       values.push(field === "genres" ? JSON.stringify(value) : value ?? null);
     }
     if (updates.length === 0) {
@@ -520,7 +480,15 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   async listShelves(userId: string): Promise<Shelf[]> {
-    return this.database.prepare("SELECT id, userId, name, createdAt FROM shelves WHERE userId = ? ORDER BY createdAt").all(userId) as unknown as Shelf[];
+    this.ensureDefaultShelf(userId);
+    return this.database
+      .prepare(
+        `SELECT id, userId, name, createdAt
+         FROM shelves
+         WHERE userId = ?
+         ORDER BY CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END, createdAt`
+      )
+      .all(userId, DEFAULT_SHELF_NAME) as unknown as Shelf[];
   }
 
   async createShelf(shelf: Shelf): Promise<void> {
@@ -530,6 +498,19 @@ export class StoryStackDatabase implements LibraryRepository {
       shelf.name,
       shelf.createdAt
     );
+  }
+
+  private ensureDefaultShelf(userId: string): void {
+    const existing = this.database
+      .prepare("SELECT id FROM shelves WHERE userId = ? AND lower(name) = lower(?) LIMIT 1")
+      .get(userId, DEFAULT_SHELF_NAME);
+    if (existing) {
+      return;
+    }
+
+    this.database
+      .prepare("INSERT INTO shelves (id, userId, name, createdAt) VALUES (?, ?, ?, ?)")
+      .run(`shelf_${randomBytes(16).toString("hex")}`, userId, DEFAULT_SHELF_NAME, new Date().toISOString());
   }
 
   async deleteShelf(userId: string, shelfId: string): Promise<void> {
@@ -604,11 +585,10 @@ export class StoryStackDatabase implements LibraryRepository {
         passwordHash TEXT,
         passwordResetRequired INTEGER NOT NULL DEFAULT 0,
         email TEXT,
-        plexId TEXT,
         lastLoginAt TEXT,
-        plexToken TEXT,
         theme TEXT NOT NULL DEFAULT 'dark' CHECK(theme IN ('dark', 'light')),
-        reviewsEnabled INTEGER NOT NULL DEFAULT 1
+        reviewsEnabled INTEGER NOT NULL DEFAULT 1,
+        metadataEditorEnabled INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS user_invites (
@@ -645,10 +625,18 @@ export class StoryStackDatabase implements LibraryRepository {
         durationSeconds REAL,
         publicationYear INTEGER,
         coverPath TEXT,
+        manualTitle TEXT,
+        manualSubtitle TEXT,
+        manualAuthor TEXT,
+        manualNarrator TEXT,
+        manualSeries TEXT,
+        manualSeriesOrder REAL,
+        manualDescription TEXT,
+        manualGenres TEXT,
+        manualPublicationYear INTEGER,
+        manualCoverPath TEXT,
         audioPath TEXT,
-        plexKey TEXT,
-        plexPartKey TEXT,
-        plexFile TEXT,
+        audioTracks TEXT,
         addedAt TEXT NOT NULL,
         hidden INTEGER NOT NULL DEFAULT 0
       );
@@ -725,15 +713,22 @@ export class StoryStackDatabase implements LibraryRepository {
     this.addColumnIfMissing("users", "passwordHash", "TEXT");
     this.addColumnIfMissing("users", "passwordResetRequired", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("users", "email", "TEXT");
-    this.addColumnIfMissing("users", "plexId", "TEXT");
-    this.addColumnIfMissing("users", "plexToken", "TEXT");
     this.addColumnIfMissing("users", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.addColumnIfMissing("users", "lastLoginAt", "TEXT");
     this.addColumnIfMissing("users", "theme", "TEXT NOT NULL DEFAULT 'dark'");
     this.addColumnIfMissing("users", "reviewsEnabled", "INTEGER NOT NULL DEFAULT 1");
-    this.addColumnIfMissing("books", "plexKey", "TEXT");
-    this.addColumnIfMissing("books", "plexPartKey", "TEXT");
-    this.addColumnIfMissing("books", "plexFile", "TEXT");
+    this.addColumnIfMissing("users", "metadataEditorEnabled", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("books", "audioTracks", "TEXT");
+    this.addColumnIfMissing("books", "manualTitle", "TEXT");
+    this.addColumnIfMissing("books", "manualSubtitle", "TEXT");
+    this.addColumnIfMissing("books", "manualAuthor", "TEXT");
+    this.addColumnIfMissing("books", "manualNarrator", "TEXT");
+    this.addColumnIfMissing("books", "manualSeries", "TEXT");
+    this.addColumnIfMissing("books", "manualSeriesOrder", "REAL");
+    this.addColumnIfMissing("books", "manualDescription", "TEXT");
+    this.addColumnIfMissing("books", "manualGenres", "TEXT");
+    this.addColumnIfMissing("books", "manualPublicationYear", "INTEGER");
+    this.addColumnIfMissing("books", "manualCoverPath", "TEXT");
   }
 
   private addColumnIfMissing(table: string, column: string, definition: string): void {
@@ -747,10 +742,10 @@ export class StoryStackDatabase implements LibraryRepository {
     const hasher = new PasswordHasher();
     const configuredAdminPassword = process.env.STORY_STACK_ADMIN_PASSWORD?.trim() || undefined;
     const configuredUserPassword = process.env.STORY_STACK_USER_PASSWORD?.trim() || undefined;
-    const adminHash = hasher.hash(configuredAdminPassword ?? "admin");
-    const userHash = hasher.hash(configuredUserPassword ?? "user");
+    const adminHash = configuredAdminPassword ? hasher.hash(configuredAdminPassword) : undefined;
+    const userHash = configuredUserPassword ? hasher.hash(configuredUserPassword) : undefined;
     const demoUser = this.database.prepare("SELECT id FROM users WHERE id = 'user_demo'").get();
-    if (demoUser) {
+    if (demoUser && adminHash) {
       this.database
         .prepare(
           `UPDATE users SET
@@ -762,7 +757,7 @@ export class StoryStackDatabase implements LibraryRepository {
            WHERE id = 'user_demo'`
         )
         .run(adminHash);
-    } else {
+    } else if (adminHash) {
       this.database
         .prepare(
           `INSERT INTO users (id, name, role, status, username, passwordHash)
@@ -772,38 +767,63 @@ export class StoryStackDatabase implements LibraryRepository {
         )
         .run("user_admin", "Admin", "admin", "admin", adminHash);
     }
-    this.database
-      .prepare(
-        `INSERT INTO users (id, name, role, status, username, passwordHash)
-         VALUES (?, ?, ?, 'active', ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-          passwordHash = ${configuredUserPassword ? "excluded.passwordHash" : "users.passwordHash"}`
-      )
-      .run("user_reader", "Reader", "user", "user", userHash);
+    if (userHash) {
+      this.database
+        .prepare(
+          `INSERT INTO users (id, name, role, status, username, passwordHash)
+           VALUES (?, ?, ?, 'active', ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+            passwordHash = ${configuredUserPassword ? "excluded.passwordHash" : "users.passwordHash"}`
+        )
+        .run("user_reader", "Reader", "user", "user", userHash);
+    }
   }
 
   private toBook(row: BookRow): Book {
     return {
       id: row.id,
       sourcePath: row.sourcePath,
-      title: row.title,
-      subtitle: row.subtitle ?? undefined,
-      author: row.author,
-      narrator: row.narrator ?? undefined,
-      series: row.series ?? undefined,
-      seriesOrder: row.seriesOrder ?? undefined,
-      description: row.description ?? undefined,
-      genres: JSON.parse(row.genres) as string[],
+      title: row.manualTitle ?? row.title,
+      subtitle: row.manualSubtitle ?? row.subtitle ?? undefined,
+      author: row.manualAuthor ?? row.author,
+      narrator: row.manualNarrator ?? row.narrator ?? undefined,
+      series: row.manualSeries ?? row.series ?? undefined,
+      seriesOrder: row.manualSeriesOrder ?? row.seriesOrder ?? undefined,
+      description: row.manualDescription ?? row.description ?? undefined,
+      genres: JSON.parse(row.manualGenres ?? row.genres) as string[],
       durationSeconds: row.durationSeconds ?? undefined,
-      publicationYear: row.publicationYear ?? undefined,
-      coverPath: row.coverPath ?? undefined,
+      publicationYear: row.manualPublicationYear ?? row.publicationYear ?? undefined,
+      coverPath: row.manualCoverPath ?? row.coverPath ?? undefined,
       audioPath: row.audioPath ?? undefined,
-      plexKey: row.plexKey ?? undefined,
-      plexPartKey: row.plexPartKey ?? undefined,
-      plexFile: row.plexFile ?? undefined,
+      audioTracks: this.parseAudioTracks(row.audioTracks, row.audioPath),
       addedAt: row.addedAt,
       hidden: Boolean(row.hidden)
     };
+  }
+
+  private parseAudioTracks(value: string | null, fallbackPath: string | null): Book["audioTracks"] {
+    if (value) {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed)) {
+          const tracks: NonNullable<Book["audioTracks"]> = [];
+          for (const track of parsed) {
+            const item = track as { path?: unknown; durationSeconds?: unknown };
+            if (typeof item.path !== "string") {
+              continue;
+            }
+            tracks.push({
+              path: item.path,
+              durationSeconds: typeof item.durationSeconds === "number" && Number.isFinite(item.durationSeconds) ? item.durationSeconds : undefined
+            });
+          }
+          return tracks;
+        }
+      } catch {
+        return fallbackPath ? [{ path: fallbackPath }] : undefined;
+      }
+    }
+    return fallbackPath ? [{ path: fallbackPath }] : undefined;
   }
 
   private withBookReviewSummaries(books: Book[]): Book[] {
@@ -881,12 +901,12 @@ export class StoryStackDatabase implements LibraryRepository {
       status: row.status,
       username: row.username ?? undefined,
       email: row.email ?? undefined,
-      plexId: row.plexId ?? undefined,
       lastLoginAt: row.lastLoginAt ?? undefined,
       passwordConfigured: Boolean(row.passwordHash),
       passwordResetRequired: Boolean(row.passwordResetRequired),
       theme: row.theme ?? "dark",
-      reviewsEnabled: row.reviewsEnabled === undefined ? true : Boolean(row.reviewsEnabled)
+      reviewsEnabled: row.reviewsEnabled === undefined ? true : Boolean(row.reviewsEnabled),
+      metadataEditorEnabled: row.metadataEditorEnabled === undefined ? false : Boolean(row.metadataEditorEnabled)
     };
   }
 
@@ -894,10 +914,13 @@ export class StoryStackDatabase implements LibraryRepository {
     const publicUrl = input.publicUrl.trim().replace(/\/$/, "");
     const checkedAt = this.getSetting("remote.checkedAt");
     if (input.mode === "local") {
-      return { mode: "local", publicUrl, status: "not_configured", message: "Local-only access is enabled.", checkedAt };
+      return { mode: "local", publicUrl, status: "ready", message: "Local network access is enabled. Users connect by local IP on the same network.", checkedAt };
+    }
+    if (input.mode === "device") {
+      return { mode: "device", publicUrl: "", status: "not_configured", message: "Local device mode reads audiobooks from a folder on this device. Server sync is not used.", checkedAt };
     }
     if (!publicUrl) {
-      return { mode: input.mode, publicUrl, status: "not_configured", message: "Add a public HTTPS address before inviting remote users.", checkedAt };
+      return { mode: input.mode, publicUrl, status: "not_configured", message: "Add a Cloudflare Tunnel or public HTTPS address before inviting remote users.", checkedAt };
     }
     if (isPrivateUrl(publicUrl)) {
       return {
@@ -929,10 +952,18 @@ interface BookRow {
   durationSeconds: number | null;
   publicationYear: number | null;
   coverPath: string | null;
+  manualTitle: string | null;
+  manualSubtitle: string | null;
+  manualAuthor: string | null;
+  manualNarrator: string | null;
+  manualSeries: string | null;
+  manualSeriesOrder: number | null;
+  manualDescription: string | null;
+  manualGenres: string | null;
+  manualPublicationYear: number | null;
+  manualCoverPath: string | null;
   audioPath: string | null;
-  plexKey: string | null;
-  plexPartKey: string | null;
-  plexFile: string | null;
+  audioTracks: string | null;
   addedAt: string;
   hidden: number;
 }
@@ -986,12 +1017,12 @@ interface UserRow {
   status: UserStatus;
   username: string | null;
   email: string | null;
-  plexId: string | null;
   lastLoginAt: string | null;
   passwordHash: string | null;
   passwordResetRequired: number;
   theme: UserTheme;
   reviewsEnabled: number;
+  metadataEditorEnabled: number;
 }
 
 export interface BookUpsertResult {
@@ -1000,18 +1031,43 @@ export interface BookUpsertResult {
 }
 
 export interface BookMetadataPatch {
+  title?: string;
   subtitle?: string;
   author?: string;
+  narrator?: string;
+  series?: string;
+  seriesOrder?: number;
   description?: string;
   genres?: string[];
   publicationYear?: number;
   coverPath?: string;
 }
 
-export interface BookPlexMatch {
-  plexKey: string;
-  plexPartKey: string;
-  plexFile: string;
+function metadataColumnForField(field: keyof BookMetadataPatch): string | undefined {
+  switch (field) {
+    case "title":
+      return "manualTitle";
+    case "subtitle":
+      return "manualSubtitle";
+    case "author":
+      return "manualAuthor";
+    case "narrator":
+      return "manualNarrator";
+    case "series":
+      return "manualSeries";
+    case "seriesOrder":
+      return "manualSeriesOrder";
+    case "description":
+      return "manualDescription";
+    case "genres":
+      return "manualGenres";
+    case "publicationYear":
+      return "manualPublicationYear";
+    case "coverPath":
+      return "manualCoverPath";
+    default:
+      return undefined;
+  }
 }
 
 export interface UserCredentials extends User {

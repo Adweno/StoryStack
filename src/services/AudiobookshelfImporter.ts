@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
-import type { Book } from "../domain/types";
+import type { Book, BookAudioTrack } from "../domain/types";
 import { IdFactory } from "../domain/IdFactory";
 
 export interface AudiobookshelfImportOptions {
@@ -75,9 +75,10 @@ export class AudiobookshelfImporter {
 
   private toBook(row: AudiobookshelfBookRow, options: AudiobookshelfImportOptions): Book {
     const audioFiles = this.parseJsonArray<AudioFileRecord>(row.audioFiles);
-    const firstAudioPath = audioFiles
-      .map((file) => file.metadata?.path)
-      .find((audioPath): audioPath is string => Boolean(audioPath));
+    const audioTracks = audioFiles
+      .map((file) => this.toAudioTrack(file, options))
+      .filter((track): track is BookAudioTrack => Boolean(track));
+    const firstAudioPath = audioTracks[0]?.path;
     const sourcePath = this.mapPrefix(row.itemPath, options.mediaPathPrefix, options.hostMediaPathPrefix);
     const audioPath = firstAudioPath
       ? this.mapPrefix(firstAudioPath, options.mediaPathPrefix, options.hostMediaPathPrefix)
@@ -98,8 +99,20 @@ export class AudiobookshelfImporter {
       publicationYear: this.toNumber(row.publishedYear),
       coverPath: row.coverPath ? this.mapCoverPath(row.coverPath, options) : undefined,
       audioPath,
+      audioTracks,
       addedAt: row.itemCreatedAt || new Date().toISOString(),
       hidden: false
+    };
+  }
+
+  private toAudioTrack(file: AudioFileRecord, options: AudiobookshelfImportOptions): BookAudioTrack | undefined {
+    const audioPath = file.metadata?.path;
+    if (!audioPath) {
+      return undefined;
+    }
+    return {
+      path: this.mapPrefix(audioPath, options.mediaPathPrefix, options.hostMediaPathPrefix),
+      durationSeconds: this.toNumber(file.duration) ?? this.toNumber(file.metadata?.duration)
     };
   }
 
@@ -135,7 +148,7 @@ export class AudiobookshelfImporter {
     return this.mapPrefix(value, options.mediaPathPrefix, options.hostMediaPathPrefix);
   }
 
-  private toNumber(value: string | number | null): number | undefined {
+  private toNumber(value: string | number | null | undefined): number | undefined {
     if (typeof value === "number" && Number.isFinite(value)) {
       return value;
     }
@@ -178,7 +191,9 @@ interface AudiobookshelfBookRow {
 }
 
 interface AudioFileRecord {
+  duration?: number | string | null;
   metadata?: {
     path?: string;
+    duration?: number | string | null;
   };
 }

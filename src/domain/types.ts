@@ -9,12 +9,12 @@ export interface User {
   status?: UserStatus;
   username?: string;
   email?: string;
-  plexId?: string;
   lastLoginAt?: string;
   passwordConfigured?: boolean;
   passwordResetRequired?: boolean;
   theme: UserTheme;
   reviewsEnabled: boolean;
+  metadataEditorEnabled: boolean;
 }
 
 export type UserStatus = "active" | "disabled";
@@ -47,13 +47,16 @@ export interface Book {
   publicationYear?: number;
   coverPath?: string;
   audioPath?: string;
-  plexKey?: string;
-  plexPartKey?: string;
-  plexFile?: string;
+  audioTracks?: BookAudioTrack[];
   addedAt: string;
   hidden: boolean;
   averageRating?: number;
   reviewCount?: number;
+}
+
+export interface BookAudioTrack {
+  path: string;
+  durationSeconds?: number;
 }
 
 export interface BookReview {
@@ -119,28 +122,15 @@ export interface MetadataEnrichmentResult {
   finishedAt: string;
 }
 
-export interface PlexSettings {
-  serverUrl: string;
-  sectionKey: string;
-}
-
-export interface PlexLibrarySection {
-  key: string;
-  title: string;
-  type: string;
-  locations: string[];
-}
-
-export interface PlexMatchResult {
-  scanned: number;
-  matched: number;
-  unmatched: number;
-  errors: string[];
-  finishedAt: string;
+export interface MetadataEnrichmentOutcome {
+  matched: boolean;
+  coversAdded: number;
+  detailsAdded: number;
+  book?: Book;
 }
 
 export interface RemoteAccessSettings {
-  mode: "local" | "manual" | "cloudflare";
+  mode: "local" | "manual" | "cloudflare" | "device";
   publicUrl: string;
   status: "not_configured" | "ready" | "warning";
   message: string;

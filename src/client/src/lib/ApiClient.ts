@@ -4,9 +4,6 @@ import type {
   CatalogSettings,
   MetadataEnrichmentResult,
   PlaybackProgress,
-  PlexLibrarySection,
-  PlexMatchResult,
-  PlexSettings,
   RemoteAccessSettings,
   Shelf,
   SyncResult,
@@ -18,15 +15,6 @@ export class ApiClient {
   async login(username: string, password: string): Promise<User> {
     const data = await this.post<{ user: User }>("/api/auth/login", { username, password });
     return data.user;
-  }
-
-  async startPlexLogin(): Promise<PlexPin> {
-    const data = await this.post<{ pin: PlexPin }>("/api/auth/plex/start", {});
-    return data.pin;
-  }
-
-  async pollPlexLogin(pinId: number): Promise<{ pending: true } | { user: User }> {
-    return this.post("/api/auth/plex/poll", { pinId });
   }
 
   async logout(): Promise<void> {
@@ -60,12 +48,43 @@ export class ApiClient {
     return this.get("/api/library");
   }
 
+  async createCastMediaToken(bookId: string): Promise<{ audioUrl: string; trackUrls: string[]; expiresAt: string }> {
+    return this.post(`/api/cast/media-token`, { bookId });
+  }
+
   async bookReviews(bookId: string): Promise<BookReviewResponse> {
     return this.get(`/api/books/${encodeURIComponent(bookId)}/reviews`);
   }
 
   async saveBookReview(bookId: string, input: { rating: number; review: string }): Promise<{ review: BookReview; summary: BookReviewSummary }> {
     return this.post(`/api/books/${encodeURIComponent(bookId)}/reviews`, input);
+  }
+
+  async updateBookMetadata(
+    bookId: string,
+    input: {
+      title?: string;
+      subtitle?: string;
+      author?: string;
+      narrator?: string;
+      series?: string;
+      seriesOrder?: number;
+      description?: string;
+      genres?: string[];
+      publicationYear?: number;
+      coverPath?: string;
+    }
+  ): Promise<Book> {
+    const data = await this.request<{ book: Book }>(`/api/books/${encodeURIComponent(bookId)}/metadata`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    });
+    return data.book;
+  }
+
+  async findBookMetadata(bookId: string): Promise<{ matched: boolean; coversAdded: number; detailsAdded: number; book: Book }> {
+    return this.post(`/api/books/${encodeURIComponent(bookId)}/metadata/find`, {});
   }
 
   async deleteMyBookReview(bookId: string): Promise<void> {
@@ -99,6 +118,10 @@ export class ApiClient {
     await this.post(`/api/shelves/${encodeURIComponent(shelfId)}/books`, { bookId });
   }
 
+  async removeBookFromShelf(shelfId: string, bookId: string): Promise<void> {
+    await this.request(`/api/shelves/${encodeURIComponent(shelfId)}/books/${encodeURIComponent(bookId)}`, { method: "DELETE" });
+  }
+
   async enrichMetadata(): Promise<MetadataEnrichmentResult> {
     const data = await this.post<{ result: MetadataEnrichmentResult }>("/api/admin/metadata/enrich", {});
     return data.result;
@@ -115,26 +138,6 @@ export class ApiClient {
 
   async syncCatalog(libraryPath: string): Promise<SyncResult> {
     const data = await this.post<{ result: SyncResult }>("/api/admin/catalog/sync", { libraryPath });
-    return data.result;
-  }
-
-  async plexSettings(): Promise<PlexSettings> {
-    const data = await this.get<{ settings: PlexSettings }>("/api/admin/plex");
-    return data.settings;
-  }
-
-  async savePlexSettings(settings: PlexSettings): Promise<PlexSettings> {
-    const data = await this.post<{ settings: PlexSettings }>("/api/admin/plex", settings);
-    return data.settings;
-  }
-
-  async plexSections(serverUrl: string): Promise<PlexLibrarySection[]> {
-    const data = await this.get<{ sections: PlexLibrarySection[] }>(`/api/admin/plex/sections?serverUrl=${encodeURIComponent(serverUrl)}`);
-    return data.sections;
-  }
-
-  async matchPlexMedia(): Promise<PlexMatchResult> {
-    const data = await this.post<{ result: PlexMatchResult }>("/api/admin/plex/match", {});
     return data.result;
   }
 
@@ -156,7 +159,10 @@ export class ApiClient {
     return this.updateUser(userId, { status });
   }
 
-  async updateUser(userId: string, patch: { role?: "admin" | "user"; status?: "active" | "disabled" }): Promise<User> {
+  async updateUser(
+    userId: string,
+    patch: { role?: "admin" | "user"; status?: "active" | "disabled"; metadataEditorEnabled?: boolean }
+  ): Promise<User> {
     const data = await this.request<{ user: User }>(`/api/admin/users/${encodeURIComponent(userId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -240,12 +246,6 @@ export class ApiClient {
     }
     return (await response.json()) as T;
   }
-}
-
-export interface PlexPin {
-  id: number;
-  code: string;
-  authUrl: string;
 }
 
 export interface BookReviewSummary {

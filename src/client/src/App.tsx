@@ -2,12 +2,15 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   ArrowLeft,
+  ArrowDownAZ,
+  ArrowUpAZ,
   BookMarked,
   Download,
   Home,
   Library,
   Play,
   Plus,
+  PencilLine,
   RefreshCw,
   Search,
   Settings,
@@ -18,21 +21,19 @@ import {
   Users,
   X
 } from "lucide-react";
-import { ApiClient, type BookReviewResponse, type PlexPin } from "./lib/ApiClient";
+import { ApiClient, type BookReviewResponse } from "./lib/ApiClient";
 import { BookCard } from "./components/BookCard";
 import { BookCover } from "./components/BookCover";
 import { PlayerBar, type PlaybackRequest } from "./components/PlayerBar";
 import { BookBrowser, type BookBrowseMode } from "./lib/BookBrowser";
+import { defaultBookSort, sortBooksForDisplay, type BookSortOptions } from "./lib/BookSorter";
 import { LibraryAddPlanner } from "./lib/LibraryAddPlanner";
 import { LibraryRemovePlanner } from "./lib/LibraryRemovePlanner";
 import { OfflineBookCache } from "./lib/OfflineBookCache";
-import storyStackLogo from "./assets/story-stack-logo.svg";
+import storyStackLogo from "./assets/story-stack-logo.png";
 import type {
   Book,
   MetadataEnrichmentResult,
-  PlexLibrarySection,
-  PlexMatchResult,
-  PlexSettings,
   RemoteAccessSettings,
   Shelf,
   SyncResult,
@@ -52,6 +53,20 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const LAST_USER_KEY = "story-stack-last-user-v1";
+const DEFAULT_SHELF_NAME = "Favorites";
+
+async function ensureDefaultShelf(api: ApiClient, shelfList: Shelf[]): Promise<Shelf[]> {
+  const existing = shelfList.find((shelf) => shelf.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase());
+  const shelvesWithDefault = existing ? shelfList : [...shelfList, await api.createShelf(DEFAULT_SHELF_NAME)];
+  return [...shelvesWithDefault].sort((left, right) => {
+    const leftIsDefault = left.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase();
+    const rightIsDefault = right.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase();
+    if (leftIsDefault !== rightIsDefault) {
+      return leftIsDefault ? -1 : 1;
+    }
+    return 0;
+  });
+}
 
 export function App() {
   const api = useMemo(() => new ApiClient(), []);
@@ -88,6 +103,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [storeBrowseMode, setStoreBrowseMode] = useState<BookBrowseMode>("title");
   const [libraryBrowseMode, setLibraryBrowseMode] = useState<BookBrowseMode>("title");
+  const [storeBookSort, setStoreBookSort] = useState<BookSortOptions>(defaultBookSort);
+  const [libraryBookSort, setLibraryBookSort] = useState<BookSortOptions>(defaultBookSort);
   const [storeCategoryKey, setStoreCategoryKey] = useState<string>();
   const [libraryCategoryKey, setLibraryCategoryKey] = useState<string>();
   const [selectedShelf, setSelectedShelf] = useState<Shelf>();
@@ -115,10 +132,6 @@ export function App() {
     scrollToPageTop();
   };
   const [catalogMessage, setCatalogMessage] = useState("");
-  const [plexSettings, setPlexSettings] = useState<PlexSettings>({ serverUrl: "", sectionKey: "" });
-  const [plexSections, setPlexSections] = useState<PlexLibrarySection[]>([]);
-  const [plexResult, setPlexResult] = useState<PlexMatchResult>();
-  const [plexMessage, setPlexMessage] = useState("");
   const [shelfName, setShelfName] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -141,11 +154,10 @@ export function App() {
   );
   const effectiveLibraryBrowseMode = browseModeForView(view, libraryBrowseMode);
   const effectiveStoreBrowseMode = browseModeForView(view, storeBrowseMode);
-  const title = selectedShelf && space === "library" && view === "shelves" ? selectedShelf.name : viewTitle(space, view);
-  const subtitle =
+  const title =
     selectedShelf && space === "library" && view === "shelves"
-      ? `${selectedShelfBooks.length} books`
-      : viewSubtitle(space, view, storeBooks.length, libraryBooks.length);
+      ? selectedShelf.name
+      : viewTitle(space, view, storeBooks.length, libraryBooks.length);
   const shellClassName = `${space === "store" ? "app-shell store-space" : "app-shell"} ${user?.theme === "light" ? "light-theme" : ""}`.trim();
 
   useEffect(() => {
@@ -211,7 +223,6 @@ export function App() {
     void loadInvites();
     void loadRemoteAccessSettings();
     void loadCatalogSettings();
-    void loadPlexSettings();
   }, [api, space, user?.role, view]);
 
   useEffect(() => {
@@ -235,6 +246,7 @@ export function App() {
   const refresh = async () => {
     try {
       const [me, store, library, shelfList] = await Promise.all([api.me(), api.store(query), api.library(), api.shelves()]);
+      const shelvesWithDefault = await ensureDefaultShelf(api, shelfList);
       window.localStorage.setItem(LAST_USER_KEY, JSON.stringify(me));
       setOfflineOnly(false);
       setUser(me);
@@ -242,7 +254,7 @@ export function App() {
       setLibraryBooks(library.books);
       setPlaybackProgressByBookId(indexProgressByBookId(library.progress));
       setCachedOfflineBooks(await offlineCache.listBooks());
-      setShelves(shelfList);
+      setShelves(shelvesWithDefault);
       if (selectedShelf) {
         const shelfBooks = await api.shelfBooks(selectedShelf.id);
         setSelectedShelfBooks(shelfBooks);
@@ -251,7 +263,17 @@ export function App() {
       const cachedBooks = await offlineCache.listBooks();
       if (cachedBooks.length > 0) {
         setOfflineOnly(true);
-        setUser(readLastUser() ?? { id: "offline", name: "Offline", role: "user", status: "active", theme: "dark", reviewsEnabled: true });
+        setUser(
+          readLastUser() ?? {
+            id: "offline",
+            name: "Offline",
+            role: "user",
+            status: "active",
+            theme: "dark",
+            reviewsEnabled: true,
+            metadataEditorEnabled: false
+          }
+        );
         setStoreBooks([]);
         setLibraryBooks([]);
         setPlaybackProgressByBookId({});
@@ -338,6 +360,37 @@ export function App() {
     }
   };
 
+  const canEditMetadata = Boolean(user && (user.role === "admin" || user.metadataEditorEnabled));
+
+  const saveBookMetadata = async (
+    book: Book,
+    input: {
+      title?: string;
+      subtitle?: string;
+      author?: string;
+      narrator?: string;
+      series?: string;
+      seriesOrder?: number;
+      description?: string;
+      genres?: string[];
+      publicationYear?: number;
+    }
+  ) => {
+    const updatedBook = await api.updateBookMetadata(book.id, input);
+    setSelectedBook(updatedBook);
+    await refresh();
+    setSelectedBook(updatedBook);
+    return updatedBook;
+  };
+
+  const findBookMetadata = async (book: Book) => {
+    const result = await api.findBookMetadata(book.id);
+    setSelectedBook(result.book);
+    await refresh();
+    setSelectedBook(result.book);
+    return result;
+  };
+
   const addToLibrary = async (book: Book) => {
     await api.addToLibrary(book.id);
     await refresh();
@@ -363,6 +416,13 @@ export function App() {
   const moveToShelf = async (book: Book, shelf: Shelf) => {
     await api.addBookToShelf(shelf.id, book.id);
     await refresh();
+  };
+
+  const removeFromShelf = async (book: Book, shelf: Shelf) => {
+    await api.removeBookFromShelf(shelf.id, book.id);
+    if (selectedShelf?.id === shelf.id) {
+      setSelectedShelfBooks((current) => current.filter((item) => item.id !== book.id));
+    }
   };
 
   const openShelf = async (shelf: Shelf) => {
@@ -547,56 +607,6 @@ export function App() {
     }
   };
 
-  const loadPlexSettings = async () => {
-    setPlexSettings(await api.plexSettings());
-  };
-
-  const savePlexSettings = async (event: FormEvent) => {
-    event.preventDefault();
-    setPlexMessage("");
-    try {
-      setPlexSettings(await api.savePlexSettings(plexSettings));
-      setPlexMessage("Plex server saved.");
-    } catch (error) {
-      setPlexMessage(error instanceof Error ? error.message : "Plex settings could not be saved.");
-    }
-  };
-
-  const matchPlexMedia = async () => {
-    setPlexMessage("Matching Plex media...");
-    setPlexResult(undefined);
-    try {
-      const result = await api.matchPlexMedia();
-      setPlexResult(result);
-      setPlexMessage("");
-      await refresh();
-    } catch (error) {
-      setPlexMessage(error instanceof Error ? error.message : "Plex media could not be matched.");
-    }
-  };
-
-  const selectPlexSection = async (section: PlexLibrarySection) => {
-    const nextSettings = { ...plexSettings, sectionKey: section.key };
-    setPlexSettings(nextSettings);
-    setPlexMessage(`Saving ${section.title}...`);
-    try {
-      setPlexSettings(await api.savePlexSettings(nextSettings));
-      setPlexMessage(`${section.title} selected.`);
-    } catch (error) {
-      setPlexMessage(error instanceof Error ? error.message : "Plex library could not be selected.");
-    }
-  };
-
-  const loadPlexSections = async () => {
-    setPlexMessage("Loading Plex libraries...");
-    try {
-      const sections = await api.plexSections(plexSettings.serverUrl);
-      setPlexSections(sections);
-      setPlexMessage(sections.length === 0 ? "No Plex libraries were found." : "");
-    } catch (error) {
-      setPlexMessage(error instanceof Error ? error.message : "Plex libraries could not be loaded.");
-    }
-  };
 
   const loadAdminUsers = async () => {
     setAdminUsers(await api.users());
@@ -617,7 +627,10 @@ export function App() {
     event.preventDefault();
     setUserMessage("");
     try {
-      const settings = await api.saveRemoteAccessSettings({ mode: remoteMode, publicUrl: remotePublicUrl });
+      const settings = await api.saveRemoteAccessSettings({
+        mode: remoteMode,
+        publicUrl: remoteMode === "device" ? "" : remotePublicUrl
+      });
       setRemoteSettings(settings);
       setRemoteMode(settings.mode);
       setRemotePublicUrl(settings.publicUrl);
@@ -691,6 +704,16 @@ export function App() {
     }
   };
 
+  const updateManagedUserMetadataEditor = async (targetUser: User, enabled: boolean) => {
+    setUserMessage("");
+    try {
+      await api.updateUser(targetUser.id, { metadataEditorEnabled: enabled });
+      await loadAdminUsers();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Metadata access could not be changed.");
+    }
+  };
+
   const deleteManagedUser = async (targetUser: User) => {
     setUserMessage("");
     try {
@@ -761,7 +784,6 @@ export function App() {
         </div>
         <div className="app-title">
           <h1>{title}</h1>
-          <p>{subtitle}</p>
         </div>
         <label className="search-box topbar-search">
           <Search size={18} />
@@ -818,7 +840,7 @@ export function App() {
                   <UserRound size={22} />
                   <div>
                     <strong>{user.name}</strong>
-                    <span>{user.email ?? user.username ?? "Plex account"}</span>
+                    <span>{user.email ?? user.username ?? "Account"}</span>
                   </div>
                 </div>
                 <dl className="account-details">
@@ -985,6 +1007,9 @@ export function App() {
             onDeleteReview={() => void deleteBookReview(selectedBook)}
             onSaveReview={(rating, review) => saveBookReview(selectedBook, rating, review)}
             reviewMessage={reviewMessage}
+            canEditMetadata={canEditMetadata}
+            onFindMetadata={() => findBookMetadata(selectedBook)}
+            onSaveMetadata={(input) => saveBookMetadata(selectedBook, input)}
             reviewsEnabled={user.reviewsEnabled}
             reviews={selectedBookReviews}
             source={selectedBookSpace}
@@ -1007,20 +1032,23 @@ export function App() {
               </div>
               <div className="settings-row">
                 <div className="settings-row-label">
-                  <strong>Remote Access</strong>
+                  <strong>Connection Mode</strong>
                   <span>{remoteSettings?.status === "ready" ? "Ready" : remoteSettings?.status === "warning" ? "Needs attention" : "Not configured"}</span>
                 </div>
                 <form className="settings-inline-form remote-access-form" onSubmit={saveRemoteAccessSettings}>
                   <select value={remoteMode} onChange={(event) => setRemoteMode(event.target.value as RemoteAccessSettings["mode"])}>
-                    <option value="local">Local only</option>
-                    <option value="cloudflare">Cloudflare Tunnel</option>
-                    <option value="manual">Manual HTTPS URL</option>
+                    <option value="cloudflare">Remote Access</option>
+                    <option value="local">Local Network</option>
+                    <option value="device">Local Device</option>
+                    {remoteMode === "manual" && <option value="manual">Manual HTTPS URL</option>}
                   </select>
-                  <input
-                    value={remotePublicUrl}
-                    onChange={(event) => setRemotePublicUrl(event.target.value)}
-                    placeholder="https://story-stack.example.com"
-                  />
+                  {remoteMode !== "device" && (
+                    <input
+                      value={remotePublicUrl}
+                      onChange={(event) => setRemotePublicUrl(event.target.value)}
+                      placeholder={remoteMode === "local" ? "http://server-ip:4100" : "https://story-stack.example.com"}
+                    />
+                  )}
                   <button className="primary command-button">Save</button>
                 </form>
               </div>
@@ -1085,7 +1113,7 @@ export function App() {
                     <div>
                       <strong>{item.name}</strong>
                       <span>
-                        {item.email ?? item.username ?? "Plex account"} - Password{" "}
+                        {item.email ?? item.username ?? "Account"} - Password{" "}
                         {item.passwordResetRequired ? "change required" : item.passwordConfigured ? "set" : "not set"}
                       </span>
                     </div>
@@ -1114,6 +1142,18 @@ export function App() {
                       <option value="active">Active</option>
                       <option value="disabled">Disabled</option>
                     </select>
+                    {item.role === "admin" ? (
+                      <span className="user-access-note">Admin access</span>
+                    ) : (
+                      <label className="settings-toggle-row user-access-toggle">
+                        <span>Can edit metadata</span>
+                        <input
+                          type="checkbox"
+                          checked={item.metadataEditorEnabled}
+                          onChange={(event) => void updateManagedUserMetadataEditor(item, event.target.checked)}
+                        />
+                      </label>
+                    )}
                     <button className="icon-button" onClick={() => void deleteManagedUser(item)} title="Remove user">
                       <Trash2 size={16} />
                     </button>
@@ -1161,49 +1201,6 @@ export function App() {
               </div>
               {metadataMessage && <div className="settings-message compact">{metadataMessage}</div>}
               {metadataResult && <MetadataSummary result={metadataResult} />}
-              <div className="settings-row">
-                <div className="settings-row-label">
-                  <strong>Plex Media</strong>
-                  <span>Optional playback matching</span>
-                </div>
-                <form className="settings-inline-form plex-settings-form" onSubmit={savePlexSettings}>
-                  <input
-                    value={plexSettings.serverUrl}
-                    onChange={(event) => setPlexSettings((current) => ({ ...current, serverUrl: event.target.value }))}
-                    placeholder="http://plex-server:32400"
-                  />
-                  <button className="primary command-button">Save</button>
-                </form>
-              </div>
-              <div className="settings-action-row">
-                <button className="command-button" onClick={() => void loadPlexSections()}>
-                  Load Libraries
-                </button>
-                <button className="command-button" onClick={() => void matchPlexMedia()}>
-                  <RefreshCw size={16} />
-                  Match Media
-                </button>
-              </div>
-              {plexSections.length > 0 && (
-                <div className="plex-section-list">
-                  {plexSections.map((section) => (
-                    <button
-                      className={plexSettings.sectionKey === section.key ? "active" : ""}
-                      key={section.key}
-                      onClick={() => void selectPlexSection(section)}
-                    >
-                      <span className="plex-section-title-row">
-                        <strong>{section.title}</strong>
-                        {plexSettings.sectionKey === section.key && <em>Selected</em>}
-                      </span>
-                      <span>{section.type}</span>
-                      {section.locations.length > 0 && <small>{section.locations.join(" | ")}</small>}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {plexMessage && <div className="settings-message compact">{plexMessage}</div>}
-              {plexResult && <PlexMatchSummary result={plexResult} />}
             </section>
             )}
           </section>
@@ -1219,6 +1216,7 @@ export function App() {
                   setSelectedShelfBooks([]);
                 }}
                 onMoveToShelf={moveToShelf}
+                onRemoveFromShelf={removeFromShelf}
                 onOfflineSave={saveOffline}
                 onClearProgress={clearBookProgress}
                 onMarkFinished={markBookFinished}
@@ -1324,6 +1322,8 @@ export function App() {
             onRemove={removeFromLibrary}
             onRemoveGroup={removeBooksFromLibrary}
             onSelect={(book) => selectBook(book, "library")}
+            sortOptions={view === "library" ? libraryBookSort : undefined}
+            onSortChange={view === "library" ? setLibraryBookSort : undefined}
             shelves={shelves}
             variant="library"
           />
@@ -1342,6 +1342,8 @@ export function App() {
             onPlay={(book) => startPlayback(book, "sample")}
             onRemove={removeFromLibrary}
             onSelect={(book) => selectBook(book, "store")}
+            sortOptions={view === "library" ? storeBookSort : undefined}
+            onSortChange={view === "library" ? setStoreBookSort : undefined}
             shelves={shelves}
             variant={space}
           />
@@ -1363,6 +1365,9 @@ function BookDetailPage({
   onDeleteReview,
   onSaveReview,
   reviewMessage,
+  canEditMetadata,
+  onFindMetadata,
+  onSaveMetadata,
   reviewsEnabled,
   reviews,
   source
@@ -1376,20 +1381,77 @@ function BookDetailPage({
   onDeleteReview: () => void;
   onSaveReview: (rating: number, review: string) => Promise<void>;
   reviewMessage: string;
+  canEditMetadata: boolean;
+  onFindMetadata: () => Promise<{ matched: boolean; coversAdded: number; detailsAdded: number; book: Book }>;
+  onSaveMetadata: (
+    input: {
+      title?: string;
+      subtitle?: string;
+      author?: string;
+      narrator?: string;
+      series?: string;
+      seriesOrder?: number;
+      description?: string;
+      genres?: string[];
+      publicationYear?: number;
+    }
+  ) => Promise<Book>;
   reviewsEnabled: boolean;
   reviews?: BookReviewResponse;
   source: Space;
 }) {
   const [rating, setRating] = useState<number | undefined>();
   const [reviewText, setReviewText] = useState("");
+  const [metadataDraft, setMetadataDraft] = useState(() => metadataDraftFromBook(book));
+  const [metadataMessage, setMetadataMessage] = useState("");
+  const [savingMetadata, setSavingMetadata] = useState(false);
+  const [findingMetadata, setFindingMetadata] = useState(false);
+  const [editingMetadata, setEditingMetadata] = useState(false);
 
   useEffect(() => {
     setRating(undefined);
     setReviewText("");
+    setMetadataDraft(metadataDraftFromBook(book));
+    setMetadataMessage("");
+    setEditingMetadata(false);
   }, [book.id]);
 
   const summary = reviews?.summary ?? { averageRating: 0, reviewCount: 0 };
   const canManageReview = source === "library" && inLibrary;
+  const durationSeconds = book.durationSeconds ?? book.audioTracks?.reduce(
+    (total, track) => total + (track.durationSeconds ?? 0),
+    0,
+  );
+  const saveMetadata = async (event: FormEvent) => {
+    event.preventDefault();
+    setSavingMetadata(true);
+    setMetadataMessage("");
+    try {
+      const updatedBook = await onSaveMetadata(metadataDraftToInput(metadataDraft));
+      setMetadataDraft(metadataDraftFromBook(updatedBook));
+      setMetadataMessage("Metadata saved.");
+      setEditingMetadata(false);
+    } catch (error) {
+      setMetadataMessage(error instanceof Error ? error.message : "Metadata could not be saved.");
+    } finally {
+      setSavingMetadata(false);
+    }
+  };
+
+  const findMetadata = async () => {
+    setFindingMetadata(true);
+    setMetadataMessage("");
+    try {
+      const result = await onFindMetadata();
+      setMetadataDraft(metadataDraftFromBook(result.book));
+      setMetadataMessage(result.matched ? "Metadata found." : "No matching metadata was found.");
+      setEditingMetadata(false);
+    } catch (error) {
+      setMetadataMessage(error instanceof Error ? error.message : "Metadata lookup could not be completed.");
+    } finally {
+      setFindingMetadata(false);
+    }
+  };
 
   return (
     <section className="book-detail-page">
@@ -1431,6 +1493,12 @@ function BookDetailPage({
                 <dd>{book.publicationYear}</dd>
               </div>
             )}
+            {durationSeconds && durationSeconds > 0 && (
+              <div>
+                <dt>Length</dt>
+                <dd>{formatBookDuration(durationSeconds)}</dd>
+              </div>
+            )}
             {book.genres.length > 0 && (
               <div>
                 <dt>Genres</dt>
@@ -1446,6 +1514,123 @@ function BookDetailPage({
               {source === "store" ? "Sample" : "Play"}
             </button>
           </div>
+          {canEditMetadata && (
+            <section className="book-metadata-tools">
+              <div className="book-metadata-actions">
+                <button
+                  className="command-button"
+                  type="button"
+                  onClick={() => {
+                    setEditingMetadata((current) => !current);
+                    setMetadataMessage("");
+                    setMetadataDraft(metadataDraftFromBook(book));
+                  }}
+                >
+                  <PencilLine size={16} />
+                  {editingMetadata ? "Cancel Edit" : "Edit Metadata"}
+                </button>
+                <button className="command-button" type="button" onClick={() => void findMetadata()} disabled={findingMetadata}>
+                  <Sparkles size={16} />
+                  Find Metadata
+                </button>
+              </div>
+              {metadataMessage && <p className="book-metadata-message">{metadataMessage}</p>}
+              {editingMetadata && (
+                <section className="book-metadata-panel">
+                  <div className="settings-section-heading compact">
+                    <h3>Edit Metadata</h3>
+                  </div>
+                  <form className="book-metadata-form" onSubmit={saveMetadata}>
+                    <div className="book-metadata-grid">
+                      <label>
+                        <span>Title</span>
+                        <input
+                          value={metadataDraft.title}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, title: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        <span>Subtitle</span>
+                        <input
+                          value={metadataDraft.subtitle}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, subtitle: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        <span>Author</span>
+                        <input
+                          value={metadataDraft.author}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, author: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        <span>Narrator</span>
+                        <input
+                          value={metadataDraft.narrator}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, narrator: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        <span>Series</span>
+                        <input
+                          value={metadataDraft.series}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, series: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        <span>Series Order</span>
+                        <input
+                          value={metadataDraft.seriesOrder}
+                          inputMode="decimal"
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, seriesOrder: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        <span>Published</span>
+                        <input
+                          value={metadataDraft.publicationYear}
+                          inputMode="numeric"
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, publicationYear: event.target.value }))}
+                        />
+                      </label>
+                      <label className="book-metadata-wide">
+                        <span>Genres</span>
+                        <input
+                          value={metadataDraft.genres}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, genres: event.target.value }))}
+                          placeholder="Fantasy, Adventure"
+                        />
+                      </label>
+                      <label className="book-metadata-wide">
+                        <span>Description</span>
+                        <textarea
+                          value={metadataDraft.description}
+                          onChange={(event) => setMetadataDraft((current) => ({ ...current, description: event.target.value }))}
+                          rows={4}
+                        />
+                      </label>
+                    </div>
+                    <div className="book-metadata-actions">
+                      <button className="primary command-button" disabled={savingMetadata}>
+                        Save Metadata
+                      </button>
+                      <button
+                        className="command-button"
+                        type="button"
+                        disabled={savingMetadata}
+                        onClick={() => {
+                          setEditingMetadata(false);
+                          setMetadataMessage("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              )}
+            </section>
+          )}
           <section className="book-detail-description">
             <h3>Description</h3>
             <p>{book.description ?? "No description imported yet."}</p>
@@ -1503,6 +1688,59 @@ function BookDetailPage({
       </div>
     </section>
   );
+}
+
+type BookMetadataDraft = {
+  title: string;
+  subtitle: string;
+  author: string;
+  narrator: string;
+  series: string;
+  seriesOrder: string;
+  description: string;
+  genres: string;
+  publicationYear: string;
+};
+
+function metadataDraftFromBook(book: Book): BookMetadataDraft {
+  return {
+    title: book.title,
+    subtitle: book.subtitle ?? "",
+    author: book.author,
+    narrator: book.narrator ?? "",
+    series: book.series ?? "",
+    seriesOrder: book.seriesOrder?.toString() ?? "",
+    description: book.description ?? "",
+    genres: book.genres.join(", "),
+    publicationYear: book.publicationYear?.toString() ?? ""
+  };
+}
+
+function metadataDraftToInput(draft: BookMetadataDraft) {
+  return {
+    title: draft.title.trim() || undefined,
+    subtitle: draft.subtitle.trim() || undefined,
+    author: draft.author.trim() || undefined,
+    narrator: draft.narrator.trim() || undefined,
+    series: draft.series.trim() || undefined,
+    seriesOrder: parseOptionalNumber(draft.seriesOrder),
+    description: draft.description.trim() || undefined,
+    genres: draft.genres
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    publicationYear: parseOptionalInteger(draft.publicationYear)
+  };
+}
+
+function parseOptionalNumber(value: string): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseOptionalInteger(value: string): number | undefined {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function StarRatingInput({ value, onChange }: { value?: number; onChange: (rating: number) => void }) {
@@ -1598,37 +1836,6 @@ function CatalogSyncSummary({ result }: { result: SyncResult }) {
   );
 }
 
-function PlexMatchSummary({ result }: { result: PlexMatchResult }) {
-  const finishedAt = new Date(result.finishedAt);
-  return (
-    <section className="metadata-summary">
-      <div className="settings-section-heading">
-        <h2>Plex Match Complete</h2>
-        <span>{Number.isNaN(finishedAt.getTime()) ? "Just now" : finishedAt.toLocaleString()}</span>
-      </div>
-      <div className="sync-summary-grid">
-        <span>
-          <strong>{result.scanned}</strong>
-          Checked
-        </span>
-        <span>
-          <strong>{result.matched}</strong>
-          Matched
-        </span>
-        <span>
-          <strong>{result.unmatched}</strong>
-          Unmatched
-        </span>
-        <span>
-          <strong>{result.errors.length}</strong>
-          Issues
-        </span>
-      </div>
-      {result.errors.length > 0 && <p>{result.errors.slice(0, 3).join(" ")}</p>}
-    </section>
-  );
-}
-
 function LoginScreen({
   api,
   message,
@@ -1640,7 +1847,6 @@ function LoginScreen({
   onMessage: (message: string) => void;
   onSignedIn: () => Promise<void>;
 }) {
-  const [pin, setPin] = useState<PlexPin>();
   const [invite, setInvite] = useState<Pick<UserInvite, "email" | "role" | "expiresAt">>();
   const [inviteToken, setInviteToken] = useState("");
   const [username, setUsername] = useState("");
@@ -1693,42 +1899,6 @@ function LoginScreen({
     }
   };
 
-  const startPlex = async () => {
-    setSubmitting(true);
-    onMessage("");
-    try {
-      const nextPin = await api.startPlexLogin();
-      setPin(nextPin);
-      window.open(nextPin.authUrl, "_blank", "noopener,noreferrer");
-      onMessage("Approve the Plex sign-in, then Story Stack will finish automatically.");
-    } catch (error) {
-      onMessage(error instanceof Error ? error.message : "Plex login could not be started.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!pin) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void api
-        .pollPlexLogin(pin.id)
-        .then((result) => {
-          if ("user" in result) {
-            window.clearInterval(timer);
-            void onSignedIn();
-          }
-        })
-        .catch((error) => {
-          window.clearInterval(timer);
-          onMessage(error instanceof Error ? error.message : "Plex login failed.");
-        });
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [api, onMessage, onSignedIn, pin]);
-
   return (
     <main className="login-shell">
       <section className="login-panel">
@@ -1755,8 +1925,8 @@ function LoginScreen({
         ) : (
           <form className="login-form" onSubmit={signIn}>
             <label>
-              Email or username
-              <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="you@example.com" autoFocus />
+              Email
+              <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="you@example.com" type="email" autoComplete="email" autoFocus />
             </label>
             <label>
               Password
@@ -1768,21 +1938,6 @@ function LoginScreen({
             </button>
           </form>
         )}
-        <div className="login-form login-secondary">
-          <p>Plex sign-in is optional for servers that enable Plex integration.</p>
-          {pin && (
-            <div className="plex-code-panel">
-              <span>Plex code</span>
-              <strong>{pin.code}</strong>
-              <a href={pin.authUrl} target="_blank" rel="noreferrer">
-                Open Plex Sign In
-              </a>
-            </div>
-          )}
-          <button className="command-button" disabled={submitting} onClick={() => void startPlex()}>
-            {submitting ? "Starting Plex..." : pin ? "Open Plex Again" : "Sign In with Plex"}
-          </button>
-        </div>
       </section>
     </main>
   );
@@ -2135,6 +2290,8 @@ function BookCollectionBrowser({
   onRemoveGroup,
   onSelect,
   playbackProgressFor,
+  sortOptions,
+  onSortChange,
   shelves,
   variant
 }: {
@@ -2158,6 +2315,8 @@ function BookCollectionBrowser({
   onRemoveGroup?: (books: Book[]) => Promise<void>;
   onSelect: (book: Book) => void;
   playbackProgressFor?: (book: Book) => number | undefined;
+  sortOptions?: BookSortOptions;
+  onSortChange?: (options: BookSortOptions) => void;
   shelves: Shelf[];
   variant: "library" | "store";
 }) {
@@ -2167,7 +2326,11 @@ function BookCollectionBrowser({
   );
   const selectedGroup = groups.find((group) => group.key === categoryKey);
   const titleBooks = useMemo(() => groups.flatMap((group) => group.books), [groups]);
-  const displayedBooks = selectedGroup?.books ?? titleBooks;
+  const baseDisplayedBooks = selectedGroup?.books ?? titleBooks;
+  const displayedBooks = useMemo(
+    () => (sortOptions ? sortBooksForDisplay(baseDisplayedBooks, sortOptions) : baseDisplayedBooks),
+    [baseDisplayedBooks, sortOptions]
+  );
   const missingGroupBookCount = selectedGroup ? new LibraryAddPlanner(inLibraryIds).missingCount(selectedGroup.books) : 0;
   const removableGroupBookCount = selectedGroup ? new LibraryRemovePlanner().removableCount(selectedGroup.books) : 0;
   const showCategories = browseMode !== "title" && !selectedGroup;
@@ -2191,14 +2354,21 @@ function BookCollectionBrowser({
         </section>
       ) : (
         <section className="book-group">
+          {sortOptions && onSortChange && (
+            <BookSortToolbar options={sortOptions} onChange={onSortChange} />
+          )}
           {selectedGroup && (
             <div className="group-heading">
-              <button className="back-button" onClick={() => onCategoryChange(undefined)}>
-                All {labelForMode(browseMode)}
+              <button
+                className="group-back-button"
+                onClick={() => onCategoryChange(undefined)}
+                title={`All ${labelForMode(browseMode)}`}
+              >
+                <ArrowLeft size={18} />
               </button>
-              <div>
+              <div className="group-title">
                 <h2>{selectedGroup.label}</h2>
-                <span>{selectedGroup.books.length} books</span>
+                <span>({selectedGroup.books.length})</span>
               </div>
               {canAddSelectedGroup && (
                 <GroupAddButton
@@ -2244,6 +2414,28 @@ function BookCollectionBrowser({
 
       {groups.length === 0 && <div className="empty-state">{emptyText}</div>}
     </section>
+  );
+}
+
+function BookSortToolbar({ options, onChange }: { options: BookSortOptions; onChange: (options: BookSortOptions) => void }) {
+  const flippedDirection = options.direction === "asc" ? "desc" : "asc";
+  return (
+    <div className="book-sort-toolbar" aria-label="Book sorting options">
+      <label>
+        <span>Sort by</span>
+        <select value={options.key} onChange={(event) => onChange({ ...options, key: event.target.value as BookSortOptions["key"] })}>
+          <option value="title">Title</option>
+          <option value="author">Author</option>
+          <option value="addedAt">Recently Added</option>
+          <option value="publicationYear">Published Year</option>
+          <option value="rating">Rating</option>
+        </select>
+      </label>
+      <button className="sort-direction-button" onClick={() => onChange({ ...options, direction: flippedDirection })} title="Swap sort order">
+        {options.direction === "asc" ? <ArrowDownAZ size={18} /> : <ArrowUpAZ size={18} />}
+        <span>{options.direction === "asc" ? "Ascending" : "Descending"}</span>
+      </button>
+    </div>
   );
 }
 
@@ -2324,7 +2516,7 @@ function GroupAddButton({
   return (
     <button className="group-add-button" disabled={disabled} onClick={() => void add()} title={`Add ${targetLabel} to My Library`}>
       <Plus size={16} />
-      {missingCount === 0 ? "In Library" : adding ? "Adding..." : `Add ${missingCount} to Library`}
+      <span>{missingCount === 0 ? "In Library" : adding ? "Adding..." : `Add ${missingCount}`}</span>
     </button>
   );
 }
@@ -2362,7 +2554,7 @@ function GroupRemoveButton({
   return (
     <button className="group-action-button danger" disabled={disabled} onClick={() => void remove()} title={`Remove this ${groupType} from My Library`}>
       <Trash2 size={16} />
-      {removing ? "Removing..." : `Remove ${count}`}
+      <span>{removing ? "Removing..." : `Remove ${count}`}</span>
     </button>
   );
 }
@@ -2459,6 +2651,7 @@ function ShelfBookBrowser({
   onClearProgress,
   onMarkFinished,
   onMoveToShelf,
+  onRemoveFromShelf,
   onOfflineSave,
   offlineProgressFor,
   offlineStateFor,
@@ -2476,6 +2669,7 @@ function ShelfBookBrowser({
   onClearProgress: (book: Book) => Promise<void>;
   onMarkFinished: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onRemoveFromShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
   offlineProgressFor: (book: Book) => number | undefined;
   offlineStateFor: (book: Book) => OfflineState;
@@ -2508,6 +2702,7 @@ function ShelfBookBrowser({
               onClearProgress={() => void onClearProgress(book)}
               onMarkFinished={() => void onMarkFinished(book)}
               onMoveToShelf={(targetShelf) => void onMoveToShelf(book, targetShelf)}
+              onRemoveFromShelf={() => void onRemoveFromShelf(book, shelf)}
               onOfflineSave={() => void onOfflineSave(book)}
               offlineProgress={offlineProgressFor(book)}
               offlineState={offlineStateFor(book)}
@@ -2566,10 +2761,10 @@ function ShelfRow({ shelf, books, api, onOpen }: { shelf: Shelf; books: Book[]; 
   );
 }
 
-function viewTitle(space: Space, view: View): string {
+function viewTitle(space: Space, view: View, storeCount: number, libraryCount: number): string {
   if (space === "store") {
     return {
-      home: "Store",
+      home: `Store ${storeCount}`,
       library: "Store Books",
       series: "Store Series",
       authors: "Store Authors",
@@ -2580,37 +2775,13 @@ function viewTitle(space: Space, view: View): string {
   }
 
   return {
-    home: "Home",
+    home: `Home ${libraryCount}`,
     library: "Library",
     series: "Series",
     authors: "Authors",
     shelves: "Shelves",
     downloads: "Downloads",
     admin: "Admin"
-  }[view];
-}
-
-function viewSubtitle(space: Space, view: View, storeCount: number, libraryCount: number): string {
-  if (space === "store") {
-    return {
-      home: `${storeCount} available books`,
-      library: `${storeCount} available books`,
-      series: "Browse Store books by series",
-      authors: "Browse Store books by author",
-      shelves: "Store",
-      downloads: "Store",
-      admin: "Store catalog and sync controls"
-    }[view];
-  }
-
-  return {
-    home: `${libraryCount} saved books`,
-    library: `${libraryCount} saved books`,
-    series: "Browse your saved books by series",
-    authors: "Browse your saved books by author",
-    shelves: "Personal organization",
-    downloads: "Saved to this device",
-    admin: "Catalog sync"
   }[view];
 }
 
@@ -2645,6 +2816,16 @@ function listeningStatusFor(positionSeconds: number, durationSeconds?: number): 
     return "finished";
   }
   return positionSeconds > 0 ? "in_progress" : "not_started";
+}
+
+function formatBookDuration(seconds: number): string {
+  const rounded = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  if (hours > 0) {
+    return `${hours} hr ${minutes} min`;
+  }
+  return `${minutes} min`;
 }
 
 function readLastUser(): User | undefined {

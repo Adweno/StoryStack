@@ -60,7 +60,10 @@ describe("AudiobookshelfImporter", () => {
       "/metadata/items/item_1/cover.jpg",
       1234,
       JSON.stringify(["A Narrator"]),
-      JSON.stringify([{ metadata: { path: "/audiobooks/Jamie/Book One/book.m4b" } }]),
+      JSON.stringify([
+        { duration: 600, metadata: { path: "/audiobooks/Jamie/Book One/part01.mp3" } },
+        { duration: 634, metadata: { path: "/audiobooks/Jamie/Book One/part02.mp3" } }
+      ]),
       JSON.stringify(["Featured"]),
       JSON.stringify(["Fantasy"])
     );
@@ -94,7 +97,11 @@ describe("AudiobookshelfImporter", () => {
       durationSeconds: 1234,
       publicationYear: 2024,
       coverPath: "/metadata/items/item_1/cover.jpg",
-      audioPath: "/srv/media/audiobooks/Jamie/Book One/book.m4b"
+      audioPath: "/srv/media/audiobooks/Jamie/Book One/part01.mp3",
+      audioTracks: [
+        { path: "/srv/media/audiobooks/Jamie/Book One/part01.mp3", durationSeconds: 600 },
+        { path: "/srv/media/audiobooks/Jamie/Book One/part02.mp3", durationSeconds: 634 }
+      ]
     });
   });
 

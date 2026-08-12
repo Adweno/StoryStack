@@ -38,8 +38,8 @@ describe("CatalogSyncService", () => {
     const database = new StoryStackDatabase(path.join(os.tmpdir(), `story-stack-sync-${crypto.randomUUID()}.sqlite`));
     database.upsertBook({
       id: "jamie_book",
-      sourcePath: "/srv/media/audiobooks/Jamie/Book",
-      title: "Jamie Book",
+      sourcePath: "/srv/media/audiobooks/Sample User/Book",
+      title: "Sample Book",
       author: "A. Writer",
       genres: [],
       addedAt: "2026-07-30T00:00:00.000Z",

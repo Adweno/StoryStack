@@ -1,0 +1,4 @@
+storePassword=replace-with-keystore-password
+keyPassword=replace-with-key-password
+keyAlias=story-stack-upload
+storeFile=C:\\path\\to\\story-stack-upload.jks

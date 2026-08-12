@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Book, MetadataEnrichmentResult } from "../domain/types";
+import type { Book, MetadataEnrichmentOutcome, MetadataEnrichmentResult } from "../domain/types";
 import type { BookMetadataPatch, StoryStackDatabase } from "../storage/StoryStackDatabase";
 import type { ExternalMetadataProvider, MetadataCandidate } from "./ExternalMetadataProvider";
 import { GoogleBooksMetadataProvider } from "./GoogleBooksMetadataProvider";
@@ -25,20 +25,14 @@ export class MetadataEnrichmentService {
 
     for (const book of books) {
       try {
-        const candidate = await this.options.provider.find(book);
-        if (!candidate) {
-          continue;
+        const outcome = await this.enrichBook(book.id);
+        if (outcome.matched) {
+          result.matched += 1;
         }
-        result.matched += 1;
-        const patch = await this.createPatch(book, candidate);
-        if (Object.keys(patch).length === 0) {
-          continue;
-        }
-        this.database.updateBookMetadata(book.id, patch);
-        if (patch.coverPath) {
+        if (outcome.coversAdded > 0) {
           result.coversAdded += 1;
         }
-        if (this.hasDetailPatch(patch)) {
+        if (outcome.detailsAdded > 0) {
           result.detailsAdded += 1;
         }
       } catch (error) {
@@ -48,6 +42,29 @@ export class MetadataEnrichmentService {
     }
 
     return result;
+  }
+
+  async enrichBook(bookId: string): Promise<MetadataEnrichmentOutcome> {
+    const book = await this.database.getBook(bookId);
+    if (!book) {
+      throw new Error("Book was not found.");
+    }
+    const candidate = await this.options.provider.find(book);
+    if (!candidate) {
+      return { matched: false, coversAdded: 0, detailsAdded: 0, book };
+    }
+    const patch = await this.createPatch(book, candidate);
+    if (Object.keys(patch).length === 0) {
+      return { matched: true, coversAdded: 0, detailsAdded: 0, book };
+    }
+    this.database.updateBookMetadata(book.id, patch);
+    const updatedBook = await this.database.getBook(book.id);
+    return {
+      matched: true,
+      coversAdded: patch.coverPath ? 1 : 0,
+      detailsAdded: this.hasDetailPatch(patch) ? 1 : 0,
+      book: updatedBook ?? book
+    };
   }
 
   private needsMetadata(book: Book): boolean {

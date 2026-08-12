@@ -59,6 +59,10 @@ describe("CatalogScanner", () => {
     expect(books).toHaveLength(1);
     expect(books[0].title).toBe("Just Kids");
     expect(books[0].audioPath).toBe(path.join(bookFolder, "Disc 01", "track01.mp3"));
+    expect(books[0].audioTracks?.map((track) => track.path)).toEqual([
+      path.join(bookFolder, "Disc 01", "track01.mp3"),
+      path.join(bookFolder, "Disc 02", "track02.mp3")
+    ]);
   });
 
   it("recognizes common audiobook audio extensions", async () => {

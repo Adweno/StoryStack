@@ -110,6 +110,30 @@ describe("LibraryService", () => {
     expect(repository.libraryBooks).toHaveLength(1);
   });
 
+  it("removes a book from a shelf without removing it from the user's library", async () => {
+    const repository = new MemoryLibraryRepository();
+    repository.books.set(sampleBook.id, sampleBook);
+    const service = new LibraryService(repository);
+
+    const shelf = await service.createShelf("user_1", "Favorites");
+    await service.addBookToShelf("user_1", shelf.id, sampleBook.id);
+    await service.removeBookFromShelf("user_1", shelf.id, sampleBook.id);
+
+    expect(repository.shelfBooks).toHaveLength(0);
+    expect(repository.libraryBooks).toHaveLength(1);
+  });
+
+  it("returns an existing shelf instead of creating a duplicate with the same name", async () => {
+    const repository = new MemoryLibraryRepository();
+    const service = new LibraryService(repository);
+
+    const first = await service.createShelf("user_1", "Favorites");
+    const second = await service.createShelf("user_1", "favorites");
+
+    expect(second).toEqual(first);
+    expect(repository.shelves).toHaveLength(1);
+  });
+
   it("marks progress as finished near the end of a book", async () => {
     const repository = new MemoryLibraryRepository();
     const service = new LibraryService(repository);

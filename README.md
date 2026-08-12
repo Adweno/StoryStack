@@ -93,7 +93,7 @@ npm run desktop:installer
 
 The first time the app opens, listeners can paste a Story Stack invite link. The invite link tells the desktop app which Story Stack server to use. Owners can still use the Owner setup panel or app menu to connect directly to a server.
 
-For access from any network, configure a public HTTPS address such as a reverse proxy or tunnel URL, not a local address like `http://192.168.1.234:4100`.
+For access from any network, configure a public HTTPS address such as a reverse proxy or tunnel URL, not a local address like `http://server-ip:4100`.
 
 ## Configuration
 
@@ -117,56 +117,41 @@ Set `STORY_STACK_LIBRARY_PATH` to the audiobook folder Story Stack should scan. 
 
 Set `STORY_STACK_ADMIN_PASSWORD` before exposing a new install outside your home network. If this value is later changed, Story Stack rotates the seeded `admin` account password on restart.
 
-Plex integration is optional. Story Stack can be used without Plex for login, sharing, playback, downloads, and remote access.
+## Hosting On Your Media Server
 
-## Hosting On The Plex Server
-
-Story Stack should run beside Plex or any other media tooling, not inside it. Install it on the server machine, point it at the audiobook folder, and expose port `4100` on your home network or through HTTPS.
+Story Stack runs independently of other media tooling. Install it on the server machine, point it at the audiobook folder, and expose port `4100` on your home network or through HTTPS.
 
 ### Current Live Deployment
 
-The public Story Stack app at `https://app.storystacknott.com` is served from the Linux Plex server through Cloudflare Tunnel.
-
-Current setup:
-
-```text
-Server: 192.168.1.234
-SSH user: adweno
-Project path: /home/adweno/story-stack/app
-Docker app container: story-stack
-Cloudflare tunnel container: story-stack-tunnel
-Public URL: https://app.storystacknott.com
-Local app port: 4100
-```
-
-After changing the web/PWA app locally, push or copy the updated files to the server and rebuild the Docker app:
+For a Linux deployment, copy the project to the server and rebuild the Docker app after changes:
 
 ```bash
-cd /home/adweno/story-stack/app
+cd /path/to/story-stack
 docker compose up -d --build story-stack
 ```
 
 Then verify the public app is serving the new build:
 
 ```bash
-curl https://app.storystacknott.com/api/health
-curl https://app.storystacknott.com/service-worker.js
+curl https://your-story-stack-domain.example/api/health
+curl https://your-story-stack-domain.example/service-worker.js
 ```
 
 For PWA changes, bump the cache name in `src/client/public/service-worker.js`. Installed phone apps can keep an older service worker until the public server serves a newer one.
 
 ### Docker Compose
 
-The included `docker-compose.yml` is set up for this Linux audiobook path:
+The included `docker-compose.yml` uses a configurable host audiobook path. Set
+`STORY_STACK_HOST_LIBRARY_PATH` in `.env` to the folder containing your audio:
 
 ```text
-/srv/media/audiobooks/
+STORY_STACK_HOST_LIBRARY_PATH=/path/to/audiobooks
 ```
 
-Run on the Plex/Linux server:
+Run on the Linux server:
 
 ```bash
-cd /home/adweno/story-stack/app
+cd /path/to/story-stack
 docker compose up -d --build
 ```
 
@@ -185,11 +170,7 @@ Open PowerShell as Administrator from the project folder:
 Start-Service StoryStack
 ```
 
-Then open:
-
-```text
-http://PLEX-SERVER-IP:4100
-```
+Then open `http://server-ip:4100` on the local network.
 
 ### Linux Systemd Service
 
@@ -201,7 +182,7 @@ npm install
 npm run build
 ```
 
-Edit `scripts/story-stack.service` so `STORY_STACK_LIBRARY_PATH` points at the Plex audiobook folder, then install:
+Edit `scripts/story-stack.service` so `STORY_STACK_LIBRARY_PATH` points at the audiobook folder, then install:
 
 ```bash
 sudo ./scripts/install-linux-service.sh /opt/story-stack
@@ -211,7 +192,7 @@ sudo systemctl start story-stack
 Then open:
 
 ```text
-http://PLEX-SERVER-IP:4100
+http://server-ip:4100
 ```
 
 For internet access, put Story Stack behind HTTPS with a reverse proxy such as Caddy, Nginx, or Traefik.
@@ -240,4 +221,5 @@ Story Stack scans audiobook folders and imports catalog information into its own
 
 ## Notes
 
-The first run creates an admin account with username `admin` and password `admin` unless environment overrides are provided. Change that password before sharing the server outside your home network.
+The first run creates the configured admin account only when
+`STORY_STACK_ADMIN_PASSWORD` is set. There is no built-in default password.

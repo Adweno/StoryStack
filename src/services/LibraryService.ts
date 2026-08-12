@@ -50,6 +50,13 @@ export class LibraryService {
       throw new Error("Shelf name is required.");
     }
 
+    const existingShelf = (await this.repository.listShelves(userId)).find(
+      (shelf) => shelf.name.toLowerCase() === cleanName.toLowerCase()
+    );
+    if (existingShelf) {
+      return existingShelf;
+    }
+
     const shelf = {
       id: this.idFactory.random("shelf"),
       userId,
@@ -80,6 +87,14 @@ export class LibraryService {
     const entry = { shelfId, bookId, position: shelfBooks.length };
     await this.repository.addBookToShelf(entry);
     return entry;
+  }
+
+  async removeBookFromShelf(userId: string, shelfId: string, bookId: string): Promise<void> {
+    const shelves = await this.repository.listShelves(userId);
+    if (!shelves.some((shelf) => shelf.id === shelfId)) {
+      throw new Error("Shelf does not belong to this user.");
+    }
+    await this.repository.removeBookFromShelf(shelfId, bookId);
   }
 
   async updateProgress(

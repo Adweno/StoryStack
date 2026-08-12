@@ -89,33 +89,6 @@ button:disabled {
   padding: 0 12px;
 }
 
-.plex-code-panel {
-  border: 1px solid #4d4338;
-  background: #181714;
-  border-radius: 8px;
-  padding: 15px;
-  display: grid;
-  gap: 7px;
-}
-
-.plex-code-panel span {
-  color: #b6aa96;
-  font-size: 13px;
-  font-weight: 760;
-  text-transform: uppercase;
-}
-
-.plex-code-panel strong {
-  color: #fff7df;
-  font-size: 34px;
-  letter-spacing: 0;
-}
-
-.plex-code-panel a {
-  color: #f6c36a;
-  font-weight: 720;
-}
-
 .login-message {
   color: #ffb7a8;
 }
@@ -144,32 +117,40 @@ button:disabled {
 
 .store-space {
   background:
-    linear-gradient(180deg, rgb(117 61 83 / 22%), transparent 300px),
-    #141217;
+    radial-gradient(circle at 18% 8%, rgb(57 120 192 / 24%), transparent 34vw),
+    radial-gradient(circle at 84% 18%, rgb(229 147 91 / 18%), transparent 30vw),
+    linear-gradient(180deg, rgb(21 31 68 / 72%), transparent 360px),
+    #081022;
   grid-template-columns: 104px minmax(0, 1fr);
 }
 
+.store-space .workspace {
+  background:
+    linear-gradient(180deg, rgb(92 144 214 / 9%), transparent 220px),
+    #081022;
+}
+
 .store-space .sidebar {
-  background: #1d1720;
-  border-right-color: #3e2a3b;
+  background: #0d1730;
+  border-right-color: #26406d;
   padding: 16px 10px;
 }
 
 .store-space nav button.active,
 .store-space nav button:hover {
-  background: #5a3347;
-  color: #fff7df;
+  background: #184d65;
+  color: #fff4dc;
 }
 
 .store-space .search-box {
-  background: #231c24;
-  border-color: #604154;
-  color: #ead8d0;
+  background: #111c38;
+  border-color: #315586;
+  color: #e7efff;
 }
 
 .store-space .app-topbar {
-  border-bottom-color: #3e2a3b;
-  background: #1b161e;
+  border-bottom-color: #26406d;
+  background: #0b142a;
 }
 
 .store-space .app-brand {
@@ -376,8 +357,9 @@ h1 {
 
 .store-space .account-button,
 .store-space .user-settings-button {
-  background: #231c24;
-  border-color: #604154;
+  background: #111c38;
+  border-color: #315586;
+  color: #e7efff;
 }
 
 .account-panel,
@@ -385,20 +367,20 @@ h1 {
   position: absolute;
   right: 0;
   top: calc(100% + 10px);
-  width: 280px;
+  width: 260px;
   border: 1px solid #4a4035;
   background: #24211d;
   border-radius: 8px;
-  padding: 14px;
+  padding: 11px;
   display: grid;
-  gap: 14px;
+  gap: 10px;
   box-shadow: 0 22px 48px rgb(0 0 0 / 42%);
   z-index: 80;
 }
 
 .user-settings-panel {
   display: grid;
-  gap: 13px;
+  gap: 9px;
 }
 
 .store-space .account-panel,
@@ -413,7 +395,7 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 10px;
 }
 
 .settings-panel-title {
@@ -430,9 +412,9 @@ h1 {
   border: 1px solid #4a4035;
   background: #151410;
   color: #f3f0e8;
-  border-radius: 7px;
-  min-height: 34px;
-  padding: 0 9px;
+  border-radius: 6px;
+  min-height: 30px;
+  padding: 0 8px;
 }
 
 .settings-toggle-row input {
@@ -616,15 +598,15 @@ h1 {
 }
 
 .store-space .settings-button {
-  border-color: #604154;
-  background: #231c24;
-  color: #ead8d0;
+  border-color: #315586;
+  background: #111c38;
+  color: #e7efff;
 }
 
 .store-space .install-button {
-  border-color: #604154;
-  background: #231c24;
-  color: #ead8d0;
+  border-color: #315586;
+  background: #111c38;
+  color: #e7efff;
 }
 
 .store-space .install-button:hover {
@@ -725,7 +707,6 @@ h1 {
 .light-theme:not(.store-space) .book-menu-panel,
 .light-theme:not(.store-space) .settings-message,
 .light-theme:not(.store-space) .sync-summary-grid span,
-.light-theme:not(.store-space) .plex-section-list button,
 .light-theme:not(.store-space) .search-box,
 .light-theme:not(.store-space) .account-button,
 .light-theme:not(.store-space) .user-settings-button {
@@ -838,6 +819,7 @@ h1 {
 .light-theme:not(.store-space) .status-button,
 .light-theme:not(.store-space) .command-button,
 .light-theme:not(.store-space) .back-button,
+.light-theme:not(.store-space) .group-back-button,
 .light-theme:not(.store-space) .detail-back-button {
   background: #fff9ef;
   border-color: #cdbda7;
@@ -915,20 +897,6 @@ h1 {
   color: #3e6836;
 }
 
-.light-theme:not(.store-space) .plex-section-list button.active {
-  border-color: #b57578;
-  background: #fff0f1;
-}
-
-.light-theme:not(.store-space) .plex-section-list span,
-.light-theme:not(.store-space) .plex-section-list small {
-  color: #6b5f50;
-}
-
-.light-theme:not(.store-space) .plex-section-title-row {
-  color: #241f19;
-}
-
 .light-theme:not(.store-space) .player-bar {
   background: #fffaf2;
   border-top-color: #d8c9b6;
@@ -983,6 +951,73 @@ h1 {
   gap: 22px;
 }
 
+.book-sort-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.book-sort-toolbar label,
+.sort-direction-button {
+  height: 38px;
+  min-height: 38px;
+  border: 1px solid #4f4438;
+  background: #211d18;
+  color: #fff7df;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.book-sort-toolbar label span {
+  color: #c9bca3;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.book-sort-toolbar select {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 760;
+}
+
+.book-sort-toolbar option {
+  background: #211d18;
+  color: #fff7df;
+}
+
+.sort-direction-button {
+  cursor: pointer;
+  font-weight: 760;
+}
+
+.sort-direction-button:hover {
+  border-color: #8b6a38;
+}
+
+.light-theme:not(.store-space) .book-sort-toolbar label,
+.light-theme:not(.store-space) .sort-direction-button {
+  background: #fffaf2;
+  color: #241f19;
+  border-color: #d8c9b6;
+}
+
+.light-theme:not(.store-space) .book-sort-toolbar label span {
+  color: #6b5f50;
+}
+
+.light-theme:not(.store-space) .book-sort-toolbar option {
+  background: #fffaf2;
+  color: #241f19;
+}
+
 .home-dashboard {
   display: grid;
   gap: 34px;
@@ -997,11 +1032,12 @@ h1 {
 
 .store-hero {
   min-height: 330px;
-  border: 1px solid #604154;
+  border: 1px solid #365d96;
   border-radius: 8px;
   background:
-    linear-gradient(135deg, rgb(52 39 62 / 96%), rgb(126 72 85 / 78%) 58%, rgb(48 92 89 / 72%)),
-    #1d1720;
+    radial-gradient(circle at 80% 8%, rgb(255 190 92 / 28%), transparent 24vw),
+    linear-gradient(135deg, rgb(10 28 66 / 98%), rgb(30 74 103 / 88%) 54%, rgb(101 51 95 / 72%)),
+    #0b1730;
   padding: clamp(18px, 3vw, 30px);
   overflow: hidden;
   box-shadow: 0 18px 40px rgb(0 0 0 / 26%);
@@ -1263,21 +1299,38 @@ h1 {
 
 .store-space .category-card,
 .store-space .book-card {
-  background: #211a20;
+  background: #111b34;
+  border-color: #27466f;
 }
 
 .store-space .category-card {
-  border-color: #463041;
+  border-color: #27466f;
 }
 
 .store-space .category-card:hover,
 .store-space .book-card:hover {
-  border-color: #a86d78;
-  background: #2a2028;
+  border-color: #66a7d7;
+  background: #162647;
 }
 
 .store-space .section-heading button {
-  color: #ffd38d;
+  color: #80d8ff;
+}
+
+.store-space .book-sort-toolbar label,
+.store-space .sort-direction-button {
+  background: #111c38;
+  border-color: #315586;
+  color: #e7efff;
+}
+
+.store-space .book-sort-toolbar label span {
+  color: #9fc8ee;
+}
+
+.store-space .book-sort-toolbar option {
+  background: #111c38;
+  color: #e7efff;
 }
 
 .category-add-button {
@@ -1358,21 +1411,27 @@ h1 {
 .group-heading {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 10px;
   border-bottom: 1px solid #39332b;
-  padding-bottom: 8px;
-  flex-wrap: wrap;
+  padding: 4px 0 10px;
+  min-height: 48px;
 }
 
-.group-heading > div {
-  display: grid;
-  gap: 2px;
+.group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
 }
 
 .group-heading h2 {
   font-size: 22px;
   color: #f3f0e8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .group-heading span {
@@ -1382,17 +1441,18 @@ h1 {
 
 .group-action-button,
 .group-add-button {
-  margin-left: auto;
   border: 1px solid #7f4b5b;
   background: #8f5161;
   color: #fff7df;
   border-radius: 7px;
-  min-height: 36px;
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 0 11px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 7px;
   font-weight: 700;
+  flex: 0 0 auto;
 }
 
 .group-action-button.danger {
@@ -1415,6 +1475,23 @@ h1 {
   border-radius: 7px;
   min-height: 34px;
   padding: 0 11px;
+}
+
+.group-back-button {
+  border: 1px solid #4d4338;
+  background: #24211d;
+  color: #f3f0e8;
+  border-radius: 7px;
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.group-back-button:hover {
+  border-color: #7e6844;
+  background: #2d2924;
 }
 
 .detail-back-button {
@@ -1822,30 +1899,30 @@ h1 {
 
 .book-detail-page {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .book-detail-layout {
   display: grid;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 820px);
-  gap: clamp(22px, 4vw, 42px);
+  grid-template-columns: minmax(150px, 220px) minmax(0, 820px);
+  gap: clamp(16px, 3vw, 30px);
   align-items: start;
 }
 
 .book-detail-cover {
-  width: min(260px, 100%);
+  width: min(220px, 100%);
 }
 
 .book-detail-cover .book-cover {
   width: 100%;
   aspect-ratio: 1;
   border-radius: 8px;
-  box-shadow: 0 18px 42px rgb(0 0 0 / 34%);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 28%);
 }
 
 .book-detail-main {
   display: grid;
-  gap: 18px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -1856,8 +1933,8 @@ h1 {
 
 .book-detail-heading h2 {
   color: #fff7df;
-  font-size: clamp(34px, 5vw, 56px);
-  line-height: 1.02;
+  font-size: clamp(28px, 4vw, 42px);
+  line-height: 1.04;
 }
 
 .book-detail-heading p,
@@ -1868,18 +1945,18 @@ h1 {
 
 .book-detail-meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
   margin: 0;
 }
 
 .book-detail-meta div {
   border: 1px solid #40372f;
   background: #24211d;
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: 7px;
+  padding: 9px 10px;
   display: grid;
-  gap: 4px;
+  gap: 3px;
 }
 
 .book-detail-meta dt,
@@ -1889,37 +1966,91 @@ h1 {
 
 .book-detail-meta dt {
   color: #b6aa96;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 760;
   text-transform: uppercase;
 }
 
 .book-detail-meta dd {
   color: #fff7df;
+  font-size: 15px;
 }
 
 .book-detail-actions {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+}
+
+.book-metadata-tools {
+  display: grid;
+  gap: 8px;
+}
+
+.book-metadata-panel {
+  display: grid;
   gap: 10px;
+  border: 1px solid #40372f;
+  background: #24211d;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.book-metadata-form {
+  display: grid;
+  gap: 10px;
+}
+
+.book-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.book-metadata-grid label,
+.book-metadata-wide {
+  display: grid;
+  gap: 5px;
+}
+
+.book-metadata-grid span,
+.book-metadata-wide span {
+  color: #b6aa96;
+  font-size: 12px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.book-metadata-wide {
+  grid-column: 1 / -1;
+}
+
+.book-metadata-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.book-metadata-message {
+  color: #d8cdbc;
 }
 
 .book-detail-description {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .book-detail-description h3 {
   margin: 0;
   color: #fff7df;
-  font-size: 22px;
+  font-size: 20px;
 }
 
 .book-review-section {
   border-top: 1px solid #40372f;
-  padding-top: 18px;
+  padding-top: 12px;
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .book-review-heading {
@@ -1932,7 +2063,7 @@ h1 {
 .book-review-heading h3 {
   margin: 0;
   color: #fff7df;
-  font-size: 22px;
+  font-size: 20px;
 }
 
 .book-review-heading span,
@@ -1943,20 +2074,20 @@ h1 {
 .review-form {
   border: 1px solid #40372f;
   background: #24211d;
-  border-radius: 8px;
-  padding: 13px;
+  border-radius: 7px;
+  padding: 10px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .review-form textarea {
   width: 100%;
   resize: vertical;
   border: 1px solid #4d4338;
-  border-radius: 7px;
+  border-radius: 6px;
   background: #181714;
   color: #f3f0e8;
-  padding: 10px 11px;
+  padding: 9px 10px;
 }
 
 .review-form > span {
@@ -2009,16 +2140,16 @@ h1 {
 
 .review-list {
   display: grid;
-  gap: 9px;
+  gap: 7px;
 }
 
 .review-card {
   border: 1px solid #3d342e;
   background: #181411;
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: 7px;
+  padding: 10px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .review-card-header {
@@ -2082,13 +2213,14 @@ h1 {
 }
 
 .settings-tabs button {
-  min-height: 34px;
+  min-height: 30px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: #bba99e;
-  padding: 0 18px;
+  padding: 0 14px;
   font-weight: 760;
+  font-size: 14px;
 }
 
 .settings-tabs button.active,
@@ -2115,8 +2247,9 @@ h1 {
   border-radius: 6px;
   background: #181714;
   color: #f3f0e8;
-  min-height: 34px;
+  min-height: 32px;
   padding: 0 9px;
+  font-size: 14px;
 }
 
 .settings-message {
@@ -2124,8 +2257,8 @@ h1 {
   background: #181411;
   color: #d8cdbc;
   border-radius: 6px;
-  padding: 8px 10px;
-  font-size: 14px;
+  padding: 7px 9px;
+  font-size: 13px;
 }
 
 .settings-message.compact {
@@ -2146,22 +2279,22 @@ h1 {
   background: #171411;
   border: 1px solid #3d322b;
   border-radius: 6px;
-  padding: 10px;
+  padding: 9px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sync-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .sync-summary-grid span {
   border: 1px solid #4d4338;
   background: #131210;
   border-radius: 6px;
-  padding: 9px;
+  padding: 8px;
   display: grid;
   gap: 2px;
   color: #b6aa96;
@@ -2170,7 +2303,7 @@ h1 {
 
 .sync-summary-grid strong {
   color: #fff7df;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
 }
 
@@ -2182,10 +2315,10 @@ h1 {
   background: linear-gradient(180deg, #241f1d 0%, #1d1a17 100%);
   border: 1px solid #42362f;
   border-radius: 8px;
-  padding: 16px;
+  padding: 12px;
   display: grid;
-  gap: 12px;
-  box-shadow: 0 16px 45px rgb(0 0 0 / 18%);
+  gap: 9px;
+  box-shadow: 0 12px 34px rgb(0 0 0 / 15%);
 }
 
 .store-space .settings-panel,
@@ -2199,27 +2332,27 @@ h1 {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 
 .settings-section-heading h2 {
-  font-size: 24px;
+  font-size: 20px;
   color: #fff7df;
   margin: 0;
 }
 
 .settings-section-heading span {
   color: #b6aa96;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .settings-row {
   display: grid;
-  grid-template-columns: 170px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(0, 1fr);
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   border-top: 1px solid rgb(255 255 255 / 6%);
-  padding: 12px 0 0;
+  padding: 9px 0 0;
 }
 
 .settings-section-heading + .settings-row {
@@ -2235,7 +2368,7 @@ h1 {
 
 .settings-row-label strong {
   color: #fff7df;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .settings-row-label span {
@@ -2243,33 +2376,54 @@ h1 {
   font-size: 13px;
 }
 
+.user-access-toggle,
+.managed-user-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #d8cdbc;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.user-access-note,
+.managed-user-note {
+  color: #b6aa96;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .settings-inline-form {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   align-items: center;
+}
+
+.settings-console .command-button,
+.settings-panel .command-button {
+  min-height: 32px;
+  border-radius: 6px;
+  padding-inline: 10px;
+  font-size: 14px;
 }
 
 .settings-action-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 6px;
   justify-content: flex-start;
-  padding-left: 186px;
+  padding-left: 162px;
 }
 
 .user-management-list,
 .compact-list {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .user-create-form {
   display: grid;
   grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.3fr) 130px auto;
-}
-
-.plex-settings-form {
-  grid-template-columns: minmax(260px, 1fr) auto;
 }
 
 .catalog-path-form {
@@ -2284,65 +2438,16 @@ h1 {
   grid-template-columns: minmax(220px, 1fr) 130px 90px auto;
 }
 
-.plex-section-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 7px;
-}
-
-.plex-section-list button {
-  border: 1px solid #4d4338;
-  background: #181714;
-  color: #f3f0e8;
-  border-radius: 6px;
-  padding: 8px 9px;
-  display: grid;
-  gap: 2px;
-  text-align: left;
-  min-height: 0;
-}
-
-.plex-section-list button.active {
-  border-color: #b66b80;
-  background: #3b2631;
-}
-
-.plex-section-list span,
-.plex-section-list small {
-  color: #b6aa96;
-}
-
-.plex-section-list small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plex-section-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: #f3f0e8;
-}
-
-.plex-section-title-row em {
-  color: #ffcf73;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 760;
-}
-
 .managed-user-row {
   border: 1px solid #3d342e;
   background: #181411;
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) minmax(180px, 260px) 120px 120px 34px;
+  grid-template-columns: 22px minmax(0, 1fr) minmax(170px, 240px) 112px 112px 30px;
   align-items: center;
-  gap: 9px;
-  min-height: 50px;
+  gap: 7px;
+  min-height: 42px;
 }
 
 .managed-user-row:hover {
@@ -2351,19 +2456,19 @@ h1 {
 }
 
 .invite-row {
-  grid-template-columns: 24px minmax(0, 1fr) 130px 34px;
+  grid-template-columns: 22px minmax(0, 1fr) 120px 30px;
 }
 
 .password-reset-form {
   display: grid;
   grid-template-columns: minmax(110px, 1fr) auto;
-  gap: 7px;
+  gap: 6px;
   align-items: center;
 }
 
 .password-reset-form .command-button {
-  min-height: 32px;
-  padding-inline: 10px;
+  min-height: 30px;
+  padding-inline: 9px;
 }
 
 .managed-user-row > div {
@@ -2384,7 +2489,7 @@ h1 {
 }
 
 .role-select {
-  min-height: 32px;
+  min-height: 30px;
 }
 
 .shelf-form {
@@ -2791,6 +2896,31 @@ audio {
     width: 150px;
   }
 
+  .group-heading {
+    gap: 8px;
+    min-height: 42px;
+    padding-bottom: 8px;
+  }
+
+  .group-heading h2 {
+    font-size: 19px;
+  }
+
+  .group-back-button,
+  .group-action-button,
+  .group-add-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .group-action-button span,
+  .group-add-button span {
+    display: none;
+  }
+
   .cover-button {
     width: calc(100% - 14px);
     max-width: 148px;
@@ -2904,7 +3034,6 @@ audio {
 
   .settings-row,
   .user-create-form,
-  .plex-settings-form,
   .catalog-path-form,
   .remote-access-form,
   .invite-form,

@@ -12,7 +12,15 @@ export class OfflineBookCache {
     this.assertSupported();
     const cache = await caches.open(CACHE_NAME);
     options.onProgress?.({ percent: 0, receivedBytes: 0 });
-    await this.cacheUrl(cache, this.audioUrl(book.id), options.onProgress);
+    const audioUrls = this.audioUrls(book);
+    for (let index = 0; index < audioUrls.length; index += 1) {
+      await this.cacheUrl(cache, audioUrls[index], (progress) => {
+        options.onProgress?.({
+          ...progress,
+          percent: progress.percent === undefined ? undefined : Math.min(99, Math.round(((index + progress.percent / 100) / audioUrls.length) * 100))
+        });
+      });
+    }
     if (book.coverPath) {
       await this.cacheUrl(cache, this.coverUrl(book.id));
     }
@@ -25,7 +33,7 @@ export class OfflineBookCache {
       return false;
     }
     const cache = await caches.open(CACHE_NAME);
-    return Boolean(await cache.match(this.audioUrl(bookId)));
+    return Boolean(await cache.match(this.audioUrl(bookId)) ?? (await cache.match(this.audioTrackUrl(bookId, 0))));
   }
 
   async listBookIds(): Promise<string[]> {
@@ -35,7 +43,7 @@ export class OfflineBookCache {
     const cache = await caches.open(CACHE_NAME);
     const requests = await cache.keys();
     return requests
-      .map((request) => new URL(request.url, window.location.origin).pathname.match(/^\/media\/books\/([^/]+)\/audio$/)?.[1])
+      .map((request) => new URL(request.url, window.location.origin).pathname.match(/^\/media\/books\/([^/]+)\/audio(?:\/0)?$/)?.[1])
       .filter((bookId): bookId is string => Boolean(bookId))
       .map((bookId) => decodeURIComponent(bookId));
   }
@@ -53,21 +61,30 @@ export class OfflineBookCache {
       return;
     }
     const cache = await caches.open(CACHE_NAME);
-    await Promise.all([cache.delete(this.audioUrl(book.id)), cache.delete(this.coverUrl(book.id))]);
+    await Promise.all([...new Set([...this.audioUrls(book), this.audioUrl(book.id), this.coverUrl(book.id)])].map((url) => cache.delete(url)));
     this.removeBookMetadata(book.id);
   }
 
-  async audioSource(bookId: string): Promise<CachedAudioSource> {
+  async audioSources(book: Book, options: { sample?: boolean } = {}): Promise<CachedAudioSource[]> {
     if (!this.isSupported()) {
-      return { url: this.audioUrl(bookId) };
+      return this.audioUrls(book, options.sample).map((url) => ({ url }));
     }
     const cache = await caches.open(CACHE_NAME);
-    const response = await cache.match(this.audioUrl(bookId));
-    if (!response) {
-      return { url: this.audioUrl(bookId) };
-    }
-    const url = URL.createObjectURL(await response.blob());
-    return { url, revoke: () => URL.revokeObjectURL(url) };
+    return Promise.all(
+      this.audioUrls(book, options.sample).map(async (sourceUrl) => {
+        const response = await cache.match(sourceUrl);
+        if (!response) {
+          return { url: sourceUrl };
+        }
+        const url = URL.createObjectURL(await response.blob());
+        return { url, revoke: () => URL.revokeObjectURL(url) };
+      })
+    );
+  }
+
+  async audioSource(bookId: string): Promise<CachedAudioSource> {
+    const sources = await this.audioSources({ id: bookId, title: "", author: "", genres: [], addedAt: "", hidden: false });
+    return sources[0];
   }
 
   private async cacheUrl(cache: Cache, url: string, onProgress?: (progress: DownloadProgress) => void): Promise<void> {
@@ -100,8 +117,19 @@ export class OfflineBookCache {
     }
   }
 
-  private audioUrl(bookId: string): string {
-    return `/media/books/${encodeURIComponent(bookId)}/audio`;
+  private audioUrl(bookId: string, sample = false): string {
+    return `/media/books/${encodeURIComponent(bookId)}/audio${sample ? "?sample=1" : ""}`;
+  }
+
+  private audioTrackUrl(bookId: string, trackIndex: number, sample = false): string {
+    return `/media/books/${encodeURIComponent(bookId)}/audio/${trackIndex}${sample ? "?sample=1" : ""}`;
+  }
+
+  private audioUrls(book: Book, sample = false): string[] {
+    if (book.audioTracks && book.audioTracks.length > 1) {
+      return book.audioTracks.map((_track, index) => this.audioTrackUrl(book.id, index, sample));
+    }
+    return [this.audioUrl(book.id, sample)];
   }
 
   private coverUrl(bookId: string): string {

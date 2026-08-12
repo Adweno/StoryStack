@@ -26,7 +26,8 @@ export class AuthService {
       passwordConfigured: Boolean(credentials.passwordHash),
       passwordResetRequired: Boolean(credentials.passwordResetRequired),
       theme: credentials.theme,
-      reviewsEnabled: Boolean(credentials.reviewsEnabled)
+      reviewsEnabled: Boolean(credentials.reviewsEnabled),
+      metadataEditorEnabled: Boolean(credentials.metadataEditorEnabled)
     });
   }
 

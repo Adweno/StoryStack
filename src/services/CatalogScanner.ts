@@ -72,7 +72,9 @@ export class CatalogScanner {
     const entries = await this.readBookFiles(directory);
     const directFiles = entries.filter((entry) => entry.directory === directory).map((entry) => entry.name);
     const metadata = await this.readMetadata(directory, directFiles);
-    const audioFile = entries.find((file) => AUDIO_EXTENSIONS.has(path.extname(file.name).toLowerCase()));
+    const audioFiles = entries.filter((file) => AUDIO_EXTENSIONS.has(path.extname(file.name).toLowerCase()));
+    const audioTracks = audioFiles.map((file) => ({ path: path.join(file.directory, file.name) }));
+    const audioFile = audioFiles[0];
     const coverFile =
       entries.find((file) => COVER_EXTENSIONS.has(path.extname(file.name).toLowerCase()) && /cover|folder|front/i.test(file.name)) ??
       entries.find((file) => COVER_EXTENSIONS.has(path.extname(file.name).toLowerCase()));
@@ -93,6 +95,7 @@ export class CatalogScanner {
       publicationYear: this.asNumber(metadata.publicationYear) ?? this.asNumber(metadata.publishedYear),
       coverPath: coverFile ? path.join(coverFile.directory, coverFile.name) : undefined,
       audioPath: audioFile ? path.join(audioFile.directory, audioFile.name) : undefined,
+      audioTracks,
       addedAt: this.clock.nowIso(),
       hidden: false
     };

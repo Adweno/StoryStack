@@ -1,14 +1,13 @@
 import express, { type Request, type Response } from "express";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
-import { Readable } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { existsSync } from "node:fs";
 import { z } from "zod";
-import type { User } from "../domain/types";
+import type { Book, User } from "../domain/types";
 import { BookCatalog } from "../domain/BookCatalog";
 import { AppContext } from "./AppContext";
+import { AuthRateLimiter } from "./AuthRateLimiter";
 
-const plexPollSchema = z.object({ pinId: z.number().int().positive() });
 const loginSchema = z.object({
   username: z.string().trim().min(1),
   password: z.string().min(1)
@@ -18,16 +17,24 @@ const bookReviewSchema = z.object({
   rating: z.number().int().min(1).max(5),
   review: z.string().trim().max(2000).default("")
 });
+const bookMetadataSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  subtitle: z.string().trim().max(200).optional(),
+  author: z.string().trim().min(1).max(120).optional(),
+  narrator: z.string().trim().max(120).optional(),
+  series: z.string().trim().max(120).optional(),
+  seriesOrder: z.number().min(0).optional(),
+  description: z.string().trim().max(5000).optional(),
+  genres: z.array(z.string().trim().min(1)).max(20).optional(),
+  publicationYear: z.number().int().min(0).max(3000).optional(),
+  coverPath: z.string().trim().max(1024).optional()
+});
 const shelfSchema = z.object({ name: z.string().trim().min(1).max(80) });
 const shelfBookSchema = z.object({ bookId: z.string().min(1) });
 const progressSchema = z.object({
   bookId: z.string().min(1),
   positionSeconds: z.number().min(0),
   durationSeconds: z.number().min(1).optional()
-});
-const plexSettingsSchema = z.object({
-  serverUrl: z.string().trim().min(1),
-  sectionKey: z.string().trim().optional().default("")
 });
 const catalogSettingsSchema = z.object({
   libraryPath: z.string().trim().min(1)
@@ -59,15 +66,23 @@ const adminPasswordResetSchema = z.object({
 });
 const userPatchSchema = z.object({
   role: z.enum(["admin", "user"]).optional(),
-  status: z.enum(["active", "disabled"]).optional()
+  status: z.enum(["active", "disabled"]).optional(),
+  metadataEditorEnabled: z.boolean().optional()
 });
 const remoteAccessSchema = z.object({
-  mode: z.enum(["local", "manual", "cloudflare"]),
+  mode: z.enum(["local", "manual", "cloudflare", "device"]),
   publicUrl: z.string().trim().default("")
 });
+const castMediaTokenSchema = z.object({ bookId: z.string().min(1) });
+
+const CAST_TOKEN_TTL_MS = 10 * 60 * 1000;
+const LOGIN_LIMIT = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 export class AppServer {
   readonly app = express();
+  private readonly castTokenSecret = randomBytes(32);
+  private readonly authRateLimiter = new AuthRateLimiter();
 
   constructor(readonly context = new AppContext()) {
     this.configure();
@@ -100,32 +115,18 @@ export class AppServer {
       if (!parsed.success) {
         return response.status(400).json({ error: "Username/email and password are required." });
       }
+      const loginKey = `login:${request.ip}:${parsed.data.username.toLowerCase()}`;
+      const retryAfter = this.authRateLimiter.consume(loginKey, LOGIN_LIMIT, LOGIN_WINDOW_MS);
+      if (retryAfter) {
+        response.setHeader("Retry-After", retryAfter);
+        return response.status(429).json({ error: "Too many sign-in attempts. Try again later." });
+      }
       const result = this.context.authService.login(parsed.data.username, parsed.data.password);
       if (!result) {
         return response.status(401).json({ error: "Sign in failed. Check the account and password." });
       }
-      this.setSessionCookie(response, result.token, result.expiresAt);
-      response.json({ user: result.user });
-    });
-
-    this.app.post("/api/auth/plex/start", async (_request, response) => {
-      try {
-        response.json({ pin: await this.context.plexAuthService.createPin() });
-      } catch (error) {
-        this.sendHandledError(response, error);
-      }
-    });
-
-    this.app.post("/api/auth/plex/poll", async (request, response) => {
-      const parsed = plexPollSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return response.status(400).json({ error: "Plex PIN id is required." });
-      }
-      const result = await this.context.plexAuthService.completePin(parsed.data.pinId);
-      if (!result) {
-        return response.status(202).json({ pending: true });
-      }
-      this.setSessionCookie(response, result.token, result.expiresAt);
+      this.authRateLimiter.clear(loginKey);
+      this.setSessionCookie(request, response, result.token, result.expiresAt);
       response.json({ user: result.user });
     });
 
@@ -145,7 +146,7 @@ export class AppServer {
       try {
         const user = this.context.database.acceptInvite({ token: request.params.token, ...parsed.data });
         const result = this.context.authService.createSession(user);
-        this.setSessionCookie(response, result.token, result.expiresAt);
+        this.setSessionCookie(request, response, result.token, result.expiresAt);
         response.json({ user: result.user });
       } catch (error) {
         this.sendHandledError(response, error);
@@ -207,6 +208,41 @@ export class AppServer {
         return response.status(404).json({ error: "Book was not found." });
       }
       response.json({ book });
+    });
+
+    this.app.patch("/api/books/:bookId/metadata", async (request, response) => {
+      const user = this.requireMetadataEditor(request, response);
+      if (!user) return;
+      const parsed = bookMetadataSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return response.status(400).json({ error: "Choose metadata fields to update." });
+      }
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      this.context.database.updateBookMetadata(request.params.bookId, parsed.data);
+      const updatedBook = await this.context.database.getBook(request.params.bookId);
+      if (!updatedBook) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      response.json({ book: updatedBook });
+    });
+
+    this.app.post("/api/books/:bookId/metadata/find", async (request, response) => {
+      const user = this.requireMetadataEditor(request, response);
+      if (!user) return;
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      try {
+        const result = await this.context.metadataEnrichmentService.enrichBook(request.params.bookId);
+        const updatedBook = await this.context.database.getBook(request.params.bookId);
+        response.json({ result, book: updatedBook ?? book });
+      } catch (error) {
+        this.sendHandledError(response, error);
+      }
     });
 
     this.app.get("/api/books/:bookId/reviews", async (request, response) => {
@@ -334,6 +370,21 @@ export class AppServer {
       }
     });
 
+    this.app.delete("/api/shelves/:shelfId/books/:bookId", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      try {
+        await this.context.libraryService.removeBookFromShelf(
+          user.id,
+          request.params.shelfId,
+          request.params.bookId
+        );
+        response.status(204).send();
+      } catch (error) {
+        this.sendHandledError(response, error);
+      }
+    });
+
     this.app.post("/api/progress", async (request, response) => {
       const user = this.requireUser(request, response);
       if (!user) return;
@@ -369,7 +420,7 @@ export class AppServer {
       if (!currentUser) return;
       const parsed = userPatchSchema.safeParse(request.body);
       if (!parsed.success) {
-        return response.status(400).json({ error: "Role or status is required." });
+        return response.status(400).json({ error: "Role, status, or metadata access is required." });
       }
       if (parsed.data.role === "user" && this.wouldRemoveLastAdmin(request.params.userId)) {
         return response.status(400).json({ error: "At least one admin account is required." });
@@ -380,6 +431,9 @@ export class AppServer {
       let user = parsed.data.role ? this.context.database.updateUserRole(request.params.userId, parsed.data.role) : this.context.database.getUserById(request.params.userId);
       if (parsed.data.status) {
         user = this.context.database.updateUserStatus(request.params.userId, parsed.data.status);
+      }
+      if (typeof parsed.data.metadataEditorEnabled === "boolean") {
+        user = this.context.database.updateUserMetadataEditorEnabled(request.params.userId, parsed.data.metadataEditorEnabled);
       }
       response.json({ user });
     });
@@ -485,72 +539,83 @@ export class AppServer {
       }
     });
 
-    this.app.get("/api/admin/plex", (request, response) => {
-      if (!this.requireAdmin(request, response)) return;
-      response.json({ settings: this.context.plexMediaService.settings() });
-    });
-
-    this.app.get("/api/admin/plex/sections", async (request, response) => {
-      const user = this.requireAdmin(request, response);
-      if (!user) return;
-      try {
-        const serverUrl = String(request.query.serverUrl ?? "").trim() || undefined;
-        response.json({ sections: await this.context.plexMediaService.listSections(user.id, serverUrl) });
-      } catch (error) {
-        this.sendHandledError(response, error);
-      }
-    });
-
-    this.app.post("/api/admin/plex", (request, response) => {
-      if (!this.requireAdmin(request, response)) return;
-      const parsed = plexSettingsSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return response.status(400).json({ error: "Plex server URL is required." });
-      }
-      try {
-        response.json({ settings: this.context.plexMediaService.saveSettings(parsed.data) });
-      } catch (error) {
-        this.sendHandledError(response, error);
-      }
-    });
-
-    this.app.post("/api/admin/plex/match", async (request, response) => {
-      const user = this.requireAdmin(request, response);
-      if (!user) return;
-      try {
-        response.json({ result: await this.context.plexMediaService.matchVisibleBooks(user.id) });
-      } catch (error) {
-        this.sendHandledError(response, error);
-      }
-    });
-
     this.app.get("/media/books/:bookId/cover", async (request, response) => {
       const book = await this.context.database.getBook(request.params.bookId);
       if (!book?.coverPath) {
         return response.status(404).send("Cover not found");
       }
+      response.setHeader("Cache-Control", "private, max-age=86400");
       response.sendFile(book.coverPath);
     });
 
-    this.app.get("/media/books/:bookId/audio", async (request, response) => {
+    this.app.post("/api/cast/media-token", async (request, response) => {
       const user = this.requireUser(request, response);
       if (!user) return;
+      const parsed = castMediaTokenSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return response.status(400).json({ error: "A book is required." });
+      }
+      const book = await this.context.database.getBook(parsed.data.bookId);
+      if (!book || (!book.audioPath && !book.audioTracks?.length)) {
+        return response.status(404).json({ error: "Audio not found." });
+      }
+      if (!this.context.database.isBookInUserLibrary(user.id, book.id)) {
+        return response.status(403).json({ error: "Add this book to your library before casting it." });
+      }
+
+      const expiresAt = Date.now() + CAST_TOKEN_TTL_MS;
+      const token = this.createCastToken(user.id, book.id, expiresAt);
+      const forwardedProto = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
+      const baseUrl = `${forwardedProto || request.protocol}://${request.get("host")}`;
+      const audioUrl = this.castMediaUrl(baseUrl, book.id, token);
+      const trackUrls = (book.audioTracks ?? []).map((_, trackIndex) =>
+        this.castMediaUrl(baseUrl, book.id, token, trackIndex)
+      );
+      response.json({
+        token,
+        expiresAt: new Date(expiresAt).toISOString(),
+        audioUrl,
+        trackUrls
+      });
+    });
+
+    this.app.get("/media/books/:bookId/audio", async (request, response) => {
+      const user = await this.requireMediaUser(request, response, request.params.bookId);
+      if (!user) return;
       const book = await this.context.database.getBook(request.params.bookId);
-      if (!book || (!book.audioPath && !book.plexPartKey)) {
+      if (!book || (!book.audioPath && !book.audioTracks?.length)) {
         return response.status(404).send("Audio not found");
       }
-      const plexUrl = this.context.plexMediaService.mediaUrl(book, user.id);
-      if (plexUrl) {
-        await this.proxyPlexAudio(request, response, plexUrl);
+      const localAudioPath = this.localAudioPath(book);
+      if (localAudioPath) {
+        response.sendFile(localAudioPath);
         return;
       }
       if (!book.audioPath) {
         return response.status(404).send("Audio not found");
       }
-      response.sendFile(book.audioPath);
+      return response.status(404).send("Audio file is not available on the server");
+    });
+
+    this.app.get("/media/books/:bookId/audio/:trackIndex", async (request, response) => {
+      const user = await this.requireMediaUser(request, response, request.params.bookId);
+      if (!user) return;
+      const book = await this.context.database.getBook(request.params.bookId);
+      const trackIndex = Number(request.params.trackIndex);
+      const track = Number.isInteger(trackIndex) && trackIndex >= 0 ? book?.audioTracks?.[trackIndex] : undefined;
+      if (!track?.path) {
+        return response.status(404).send("Audio track not found");
+      }
+      if (!existsSync(track.path)) {
+        return response.status(404).send("Audio track is not available on the server");
+      }
+      response.sendFile(track.path);
     });
 
     this.app.use((_request, response) => {
+      if (_request.path.startsWith("/api/")) {
+        return response.status(404).json({ error: "API route not found." });
+      }
       const indexPath = path.resolve("dist/client/index.html");
       if (existsSync(indexPath)) {
         return response.sendFile(indexPath);
@@ -561,6 +626,80 @@ export class AppServer {
 
   private currentUser(request: Request): User | undefined {
     return this.context.authService.sessionUser(this.sessionToken(request));
+  }
+
+  private localAudioPath(book: Book): string | undefined {
+    for (const candidate of [book.audioPath]) {
+      if (candidate && existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  private async requireMediaUser(request: Request, response: Response, bookId: string): Promise<User | undefined> {
+    const sessionUser = this.currentUser(request);
+    if (sessionUser) {
+      if (request.query.sample === "1") {
+        const book = await this.context.database.getBook(bookId);
+        if (book && !book.hidden) return sessionUser;
+        response.status(404).json({ error: "Book was not found." });
+        return undefined;
+      }
+      if (!this.context.database.isBookInUserLibrary(sessionUser.id, bookId)) {
+        response.status(403).json({ error: "Add this book to your library before playing it." });
+        return undefined;
+      }
+      return sessionUser;
+    }
+    const castUserId = this.verifyCastToken(String(request.query.castToken ?? ""), bookId);
+    const castUser = castUserId ? this.context.database.getUserById(castUserId) : undefined;
+    if (!castUser || castUser.status === "disabled") {
+      response.status(401).json({ error: "Login required." });
+      return undefined;
+    }
+    if (!this.context.database.isBookInUserLibrary(castUser.id, bookId)) {
+      response.status(403).json({ error: "Add this book to your library before playing it." });
+      return undefined;
+    }
+    return castUser;
+  }
+
+  private createCastToken(userId: string, bookId: string, expiresAt: number): string {
+    const payload = Buffer.from(JSON.stringify({ userId, bookId, expiresAt })).toString("base64url");
+    const signature = createHmac("sha256", this.castTokenSecret).update(payload).digest("base64url");
+    return `${payload}.${signature}`;
+  }
+
+  private verifyCastToken(token: string, bookId: string): string | undefined {
+    const [payload, signature] = token.split(".");
+    if (!payload || !signature) return undefined;
+    const expected = createHmac("sha256", this.castTokenSecret).update(payload).digest();
+    let actual: Buffer;
+    try {
+      actual = Buffer.from(signature, "base64url");
+    } catch {
+      return undefined;
+    }
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return undefined;
+    try {
+      const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+        userId?: string;
+        bookId?: string;
+        expiresAt?: number;
+      };
+      if (!parsed.userId || parsed.bookId !== bookId || !parsed.expiresAt || parsed.expiresAt <= Date.now()) {
+        return undefined;
+      }
+      return parsed.userId;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private castMediaUrl(baseUrl: string, bookId: string, token: string, trackIndex?: number): string {
+    const suffix = trackIndex === undefined ? "audio" : `audio/${trackIndex}`;
+    return `${baseUrl}/media/books/${encodeURIComponent(bookId)}/${suffix}?castToken=${encodeURIComponent(token)}`;
   }
 
   private requireUser(request: Request, response: Response): User | undefined {
@@ -584,6 +723,18 @@ export class AppServer {
     return user;
   }
 
+  private requireMetadataEditor(request: Request, response: Response): User | undefined {
+    const user = this.requireUser(request, response);
+    if (!user) {
+      return undefined;
+    }
+    if (user.role !== "admin" && !user.metadataEditorEnabled) {
+      response.status(403).json({ error: "Metadata editing is not enabled for this account." });
+      return undefined;
+    }
+    return user;
+  }
+
   private sessionToken(request: Request): string | undefined {
     const cookie = request.headers.cookie ?? "";
     return cookie
@@ -593,10 +744,12 @@ export class AppServer {
       ?.split("=")[1];
   }
 
-  private setSessionCookie(response: Response, token: string, expiresAt: Date): void {
+  private setSessionCookie(request: Request, response: Response, token: string, expiresAt: Date): void {
+    const forwardedProto = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
     response.cookie("story_stack_session", token, {
       httpOnly: true,
       sameSite: "lax",
+      secure: request.protocol === "https" || forwardedProto === "https",
       expires: expiresAt,
       path: "/"
     });
@@ -613,25 +766,4 @@ export class AppServer {
     response.status(400).json({ error: message });
   }
 
-  private async proxyPlexAudio(request: Request, response: Response, url: string): Promise<void> {
-    const plexResponse = await fetch(url, {
-      headers: request.headers.range ? { Range: request.headers.range } : undefined
-    });
-    if (!plexResponse.ok && plexResponse.status !== 206) {
-      response.status(plexResponse.status).send("Plex audio not available");
-      return;
-    }
-    for (const header of ["content-type", "content-length", "content-range", "accept-ranges"]) {
-      const value = plexResponse.headers.get(header);
-      if (value) {
-        response.setHeader(header, value);
-      }
-    }
-    response.status(plexResponse.status);
-    if (!plexResponse.body) {
-      response.end();
-      return;
-    }
-    Readable.fromWeb(plexResponse.body as unknown as NodeReadableStream).pipe(response);
-  }
 }
