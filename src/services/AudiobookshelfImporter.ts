@@ -86,14 +86,7 @@ export class AudiobookshelfImporter {
     const audioPath = firstAudioPath
       ? this.mapPrefix(firstAudioPath, options.mediaPathPrefix, options.hostMediaPathPrefix)
       : sourcePath;
-    const chapters = this.parseJsonArray<BookChapterRecord>(row.chapters)
-      .map((chapter, index) => {
-        const start = this.toNumber(chapter.start);
-        const end = this.toNumber(chapter.end);
-        if (start === undefined || end === undefined || end <= start) return undefined;
-        return { id: String(chapter.id ?? `chapter-${index + 1}`), title: chapter.title?.trim() || `Chapter ${index + 1}`, startSeconds: start, endSeconds: end };
-      })
-      .filter((chapter): chapter is NonNullable<typeof chapter> => Boolean(chapter));
+    const chapters = this.parseBookChapters(row.chapters, audioFiles);
 
     return {
       id: `abs_${row.itemId}` || this.idFactory.stableBookId(sourcePath),
@@ -138,6 +131,45 @@ export class AudiobookshelfImporter {
     } catch {
       return [];
     }
+  }
+
+  private parseBookChapters(bookValue: string | null, audioFiles: AudioFileRecord[]): NonNullable<Book["chapters"]> {
+    const bookChapters = this.parseJsonArray<BookChapterRecord>(bookValue);
+    if (bookChapters.length) {
+      return this.normalizeChapters(bookChapters);
+    }
+
+    // Audiobookshelf stores chapter markers on each audio file. Convert those
+    // file-relative offsets into positions in the book's combined timeline.
+    const chapters: BookChapterRecord[] = [];
+    let fileOffset = 0;
+    for (const file of audioFiles) {
+      for (const chapter of file.chapters ?? []) {
+        chapters.push({
+          ...chapter,
+          start: (this.toNumber(chapter.start) ?? 0) + fileOffset,
+          end: (this.toNumber(chapter.end) ?? 0) + fileOffset
+        });
+      }
+      fileOffset += this.toNumber(file.duration) ?? this.toNumber(file.metadata?.duration) ?? 0;
+    }
+    return this.normalizeChapters(chapters);
+  }
+
+  private normalizeChapters(chapters: BookChapterRecord[]): NonNullable<Book["chapters"]> {
+    return chapters
+      .map((chapter, index) => {
+        const start = this.toNumber(chapter.start);
+        const end = this.toNumber(chapter.end);
+        if (start === undefined || end === undefined || end <= start) return undefined;
+        return {
+          id: String(chapter.id ?? `chapter-${index + 1}`),
+          title: chapter.title?.trim() || `Chapter ${index + 1}`,
+          startSeconds: start,
+          endSeconds: end
+        };
+      })
+      .filter((chapter): chapter is NonNullable<typeof chapter> => Boolean(chapter));
   }
 
   private mapPrefix(value: string, fromPrefix: string, toPrefix: string): string {
@@ -209,6 +241,7 @@ interface AudioFileRecord {
     path?: string;
     duration?: number | string | null;
   };
+  chapters?: BookChapterRecord[];
 }
 
 interface BookChapterRecord {

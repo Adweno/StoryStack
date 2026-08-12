@@ -104,4 +104,13 @@ void main() {
     expect(summary?.percent, 100);
     expect(summary?.timeLeft, Duration.zero);
   });
+
+  test('download cleanup matches only the requested book artifacts', () {
+    expect(isDownloadArtifactForBook('book.audio', 'book'), isTrue);
+    expect(isDownloadArtifactForBook('book.audio.part', 'book'), isTrue);
+    expect(isDownloadArtifactForBook('book.audio.part.3', 'book'), isTrue);
+    expect(isDownloadArtifactForBook('book.2.audio.part', 'book'), isTrue);
+    expect(isDownloadArtifactForBook('book-extended.audio', 'book'), isFalse);
+    expect(isDownloadArtifactForBook('book.2.audio', 'book-extended'), isFalse);
+  });
 }

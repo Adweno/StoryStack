@@ -61,7 +61,11 @@ describe("AudiobookshelfImporter", () => {
       1234,
       JSON.stringify(["A Narrator"]),
       JSON.stringify([
-        { duration: 600, metadata: { path: "/audiobooks/Jamie/Book One/part01.mp3" } },
+        {
+          duration: 600,
+          metadata: { path: "/audiobooks/Jamie/Book One/part01.mp3" },
+          chapters: [{ id: 1, start: 0, end: 120, title: "Opening" }]
+        },
         { duration: 634, metadata: { path: "/audiobooks/Jamie/Book One/part02.mp3" } }
       ]),
       JSON.stringify(["Featured"]),
@@ -101,8 +105,47 @@ describe("AudiobookshelfImporter", () => {
       audioTracks: [
         { path: "/srv/media/audiobooks/Jamie/Book One/part01.mp3", durationSeconds: 600 },
         { path: "/srv/media/audiobooks/Jamie/Book One/part02.mp3", durationSeconds: 634 }
-      ]
+      ],
+      chapters: [{ id: "1", title: "Opening", startSeconds: 0, endSeconds: 120 }]
     });
+  });
+
+  it("flattens chapters stored on multiple audio files into book positions", async () => {
+    const folder = path.join(os.tmpdir(), `story-stack-abs-${crypto.randomUUID()}`);
+    const databasePath = path.join(folder, "absdatabase.sqlite");
+    await mkdir(folder, { recursive: true });
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE libraryItems (id TEXT, path TEXT, relPath TEXT, mediaId TEXT, mediaType TEXT, isMissing INTEGER, isInvalid INTEGER, createdAt TEXT);
+      CREATE TABLE books (id TEXT, title TEXT, subtitle TEXT, publishedYear TEXT, description TEXT, coverPath TEXT, duration REAL, narrators TEXT, audioFiles TEXT, tags TEXT, genres TEXT);
+      CREATE TABLE authors (id TEXT, name TEXT);
+      CREATE TABLE bookAuthors (id TEXT, bookId TEXT, authorId TEXT);
+      CREATE TABLE series (id TEXT, name TEXT);
+      CREATE TABLE bookSeries (id TEXT, bookId TEXT, seriesId TEXT, sequence TEXT);
+    `);
+    db.prepare("INSERT INTO libraryItems VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("item_3", "/audiobooks/Abandon", "Abandon", "book_3", "book", 0, 0, "2026-07-30T00:00:00.000Z");
+    db.prepare("INSERT INTO books VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      "book_3", "Abandon", null, null, null, null, 240, "[]",
+      JSON.stringify([
+        { duration: 120, metadata: { path: "/audiobooks/Abandon/01.mp3" }, chapters: [{ id: 1, start: 0, end: 60, title: "Chapter 1" }] },
+        { duration: 120, metadata: { path: "/audiobooks/Abandon/02.mp3" }, chapters: [{ id: 2, start: 0, end: 45, title: "Chapter 2" }] }
+      ]), "[]", "[]"
+    );
+    db.close();
+
+    const books = new AudiobookshelfImporter().importBooks({
+      databasePath,
+      libraryPathPrefix: "/audiobooks",
+      mediaPathPrefix: "/audiobooks",
+      hostMediaPathPrefix: "/srv/media/audiobooks",
+      metadataPathPrefix: "/metadata",
+      hostMetadataPathPrefix: "/metadata"
+    });
+
+    expect(books[0].chapters).toEqual([
+      { id: "1", title: "Chapter 1", startSeconds: 0, endSeconds: 60 },
+      { id: "2", title: "Chapter 2", startSeconds: 120, endSeconds: 165 }
+    ]);
   });
 
   it("maps media-folder cover paths when Audiobookshelf stores covers beside books", async () => {
