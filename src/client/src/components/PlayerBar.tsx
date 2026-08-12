@@ -1,6 +1,6 @@
-import { Cast as CastIcon, ChevronUp, Gauge, Pause, Play, RotateCcw, RotateCw, X } from "lucide-react";
+import { Bookmark, Cast as CastIcon, ChevronUp, Gauge, List, Pause, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Book } from "../types";
+import type { Book, BookBookmark } from "../types";
 import { ApiClient } from "../lib/ApiClient";
 import { OfflineBookCache, type CachedAudioSource } from "../lib/OfflineBookCache";
 import { BookCover } from "./BookCover";
@@ -33,6 +33,7 @@ export function PlayerBar({
   const [expanded, setExpanded] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [castAvailable, setCastAvailable] = useState(false);
+  const [bookmarks, setBookmarks] = useState<BookBookmark[]>([]);
   const book = playback?.book;
   const sampleStartSeconds = 180;
   const sampleDurationSeconds = 30;
@@ -101,6 +102,16 @@ export function PlayerBar({
     setTrackDurations(book?.audioTracks?.map((track) => track.durationSeconds ?? 0) ?? []);
     lastSavedSecondRef.current = -1;
   }, [playback?.requestId]);
+
+  useEffect(() => {
+    if (!book || playback?.mode !== "play") {
+      setBookmarks([]);
+      return;
+    }
+    let active = true;
+    void api.bookBookmarks(book.id).then((items) => { if (active) setBookmarks(items); }).catch(() => { if (active) setBookmarks([]); });
+    return () => { active = false; };
+  }, [api, book?.id, playback?.mode, playback?.requestId]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -240,6 +251,24 @@ export function PlayerBar({
     setPlaybackRate(nextRate);
   };
 
+  const addBookmark = async () => {
+    if (!book || playback?.mode !== "play") return;
+    const title = window.prompt("Bookmark note", `Bookmark at ${formatTime(progressValue)}`);
+    if (title === null) return;
+    try {
+      const bookmark = await api.createBookBookmark(book.id, { positionSeconds: progressValue, title });
+      setBookmarks((current) => [...current, bookmark].sort((left, right) => left.positionSeconds - right.positionSeconds));
+    } catch {
+      // Bookmarks are optional; keep playback usable if the request fails.
+    }
+  };
+
+  const removeBookmark = async (bookmark: BookBookmark) => {
+    if (!book) return;
+    await api.deleteBookBookmark(book.id, bookmark.id);
+    setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
+  };
+
   if (!book) {
     return null;
   }
@@ -296,6 +325,22 @@ export function PlayerBar({
           </div>
           {renderProgressControl()}
           {renderProgressStats()}
+          {playback.mode === "play" && (
+            <div className="player-reference-tools">
+              <div className="player-reference-actions">
+                <button className="command-button" onClick={() => void addBookmark()}><Bookmark size={16} /> Bookmark moment</button>
+                {book.chapters?.length ? <span><List size={15} /> {book.chapters.length} chapters</span> : null}
+              </div>
+              {bookmarks.length > 0 && <div className="player-bookmark-list">
+                {bookmarks.map((bookmark) => (
+                  <div className="player-bookmark" key={bookmark.id}>
+                    <button className="link-button" onClick={() => seekTo(bookmark.positionSeconds)}>{bookmark.title} <small>{formatTime(bookmark.positionSeconds)}</small></button>
+                    <button className="icon-button" onClick={() => void removeBookmark(bookmark)} title="Remove bookmark"><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>}
+            </div>
+          )}
           <div className="player-controls expanded-controls">
             <button className="icon-button" onClick={() => skipBy(-15)} title="Back 15 seconds">
               <RotateCcw size={18} />

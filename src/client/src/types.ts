@@ -13,6 +13,7 @@ export interface Book {
   coverPath?: string;
   audioPath?: string;
   audioTracks?: BookAudioTrack[];
+  chapters?: BookChapter[];
   addedAt: string;
   hidden: boolean;
   inLibrary?: boolean;
@@ -23,6 +24,23 @@ export interface Book {
 export interface BookAudioTrack {
   path: string;
   durationSeconds?: number;
+}
+
+export interface BookChapter {
+  id: string;
+  title: string;
+  startSeconds: number;
+  endSeconds: number;
+}
+
+export interface BookBookmark {
+  id: string;
+  bookId: string;
+  userId: string;
+  positionSeconds: number;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BookReview {

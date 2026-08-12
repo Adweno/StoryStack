@@ -36,6 +36,11 @@ const progressSchema = z.object({
   positionSeconds: z.number().min(0),
   durationSeconds: z.number().min(1).optional()
 });
+const bookmarkSchema = z.object({
+  positionSeconds: z.number().min(0),
+  title: z.string().trim().max(120).optional()
+});
+const bookmarkPatchSchema = bookmarkSchema.partial();
 const catalogSettingsSchema = z.object({
   libraryPath: z.string().trim().min(1)
 });
@@ -260,6 +265,45 @@ export class AppServer {
         reviews,
         myReview: reviews.find((review) => review.userId === user.id)
       });
+    });
+
+    this.app.get("/api/books/:bookId/bookmarks", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) return response.status(404).json({ error: "Book was not found." });
+      if (!this.context.database.isBookInUserLibrary(user.id, book.id)) return response.status(403).json({ error: "Add this book to your library first." });
+      response.json({ bookmarks: this.context.database.listBookBookmarks(book.id, user.id) });
+    });
+
+    this.app.post("/api/books/:bookId/bookmarks", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const parsed = bookmarkSchema.safeParse(request.body);
+      if (!parsed.success) return response.status(400).json({ error: "A valid bookmark position is required." });
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) return response.status(404).json({ error: "Book was not found." });
+      if (!this.context.database.isBookInUserLibrary(user.id, book.id)) return response.status(403).json({ error: "Add this book to your library first." });
+      response.status(201).json({ bookmark: this.context.database.createBookBookmark({ bookId: book.id, userId: user.id, ...parsed.data }) });
+    });
+
+    this.app.patch("/api/books/:bookId/bookmarks/:bookmarkId", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const parsed = bookmarkPatchSchema.safeParse(request.body);
+      if (!parsed.success) return response.status(400).json({ error: "A valid bookmark update is required." });
+      const bookmark = this.context.database.updateBookBookmark(request.params.bookmarkId, user.id, parsed.data);
+      if (!bookmark || bookmark.bookId !== request.params.bookId) return response.status(404).json({ error: "Bookmark was not found." });
+      response.json({ bookmark });
+    });
+
+    this.app.delete("/api/books/:bookId/bookmarks/:bookmarkId", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const bookmark = this.context.database.listBookBookmarks(request.params.bookId, user.id).find((item) => item.id === request.params.bookmarkId);
+      if (!bookmark) return response.status(404).json({ error: "Bookmark was not found." });
+      this.context.database.deleteBookBookmark(bookmark.id, user.id);
+      response.status(204).send();
     });
 
     this.app.post("/api/books/:bookId/reviews", async (request, response) => {

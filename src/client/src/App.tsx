@@ -475,9 +475,9 @@ export function App() {
     }
   };
 
-  const startPlayback = (book: Book, mode: PlaybackRequest["mode"]) => {
+  const startPlayback = (book: Book, mode: PlaybackRequest["mode"], chapterStartSeconds?: number) => {
     const savedProgress = playbackProgressByBookId[book.id];
-    const startSeconds = mode === "play" && savedProgress?.status !== "finished" ? savedProgress?.positionSeconds : undefined;
+    const startSeconds = chapterStartSeconds ?? (mode === "play" && savedProgress?.status !== "finished" ? savedProgress?.positionSeconds : undefined);
     setPlayback({ book, mode, requestId: Date.now(), startSeconds });
   };
 
@@ -1003,6 +1003,7 @@ export function App() {
             onAdd={() => void addToLibrary(selectedBook)}
             onBack={() => setSelectedBook(undefined)}
             onPlay={() => startPlayback(selectedBook, selectedBookSpace === "store" ? "sample" : "play")}
+            onPlayAtChapter={(startSeconds) => startPlayback(selectedBook, selectedBookSpace === "store" ? "sample" : "play", startSeconds)}
             onRemove={() => void removeFromLibrary(selectedBook)}
             onDeleteReview={() => void deleteBookReview(selectedBook)}
             onSaveReview={(rating, review) => saveBookReview(selectedBook, rating, review)}
@@ -1361,6 +1362,7 @@ function BookDetailPage({
   onAdd,
   onBack,
   onPlay,
+  onPlayAtChapter,
   onRemove,
   onDeleteReview,
   onSaveReview,
@@ -1377,6 +1379,7 @@ function BookDetailPage({
   onAdd: () => void;
   onBack: () => void;
   onPlay: () => void;
+  onPlayAtChapter: (startSeconds: number) => void;
   onRemove: () => void;
   onDeleteReview: () => void;
   onSaveReview: (rating: number, review: string) => Promise<void>;
@@ -1506,6 +1509,23 @@ function BookDetailPage({
               </div>
             )}
           </dl>
+          {book.chapters && book.chapters.length > 0 && (
+            <section className="book-chapters-section">
+              <div className="book-review-heading">
+                <h3>Chapters</h3>
+                <span>{book.chapters.length}</span>
+              </div>
+              <div className="book-chapter-list">
+                {book.chapters.map((chapter, index) => (
+                  <button className="book-chapter-row" key={chapter.id} onClick={() => onPlayAtChapter(chapter.startSeconds)}>
+                    <span className="book-chapter-number">{index + 1}</span>
+                    <span className="book-chapter-copy"><strong>{chapter.title}</strong><small>{formatTime(chapter.startSeconds)} - {formatTime(chapter.endSeconds)}</small></span>
+                    <Play size={15} />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           <div className="book-detail-actions">
             <button className="primary command-button" onClick={inLibrary ? onRemove : onAdd}>
               {inLibrary ? "Remove from Library" : "Add to Library"}
@@ -2826,6 +2846,16 @@ function formatBookDuration(seconds: number): string {
     return `${hours} hr ${minutes} min`;
   }
   return `${minutes} min`;
+}
+
+function formatTime(seconds: number): string {
+  const rounded = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const remainingSeconds = rounded % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+    : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function readLastUser(): User | undefined {

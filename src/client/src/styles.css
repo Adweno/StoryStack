@@ -1943,6 +1943,93 @@ h1 {
   line-height: 1.5;
 }
 
+.book-chapters-section {
+  margin-top: 1.5rem;
+}
+
+.book-chapter-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.book-chapter-row,
+.player-bookmark {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+}
+
+.book-chapter-row:hover {
+  border-color: var(--accent);
+}
+
+.book-chapter-number {
+  width: 1.5rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.book-chapter-copy {
+  display: grid;
+  gap: 0.2rem;
+  flex: 1;
+}
+
+.book-chapter-copy small,
+.player-bookmark small {
+  color: var(--muted);
+}
+
+.player-reference-tools {
+  display: grid;
+  gap: 0.65rem;
+  width: min(100%, 42rem);
+  margin: 0 auto;
+}
+
+.player-reference-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.player-reference-actions span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+}
+
+.player-bookmark-list {
+  display: grid;
+  gap: 0.35rem;
+  max-height: 10rem;
+  overflow-y: auto;
+}
+
+.player-bookmark {
+  padding: 0.4rem 0.55rem;
+}
+
+.player-bookmark .link-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
 .book-detail-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

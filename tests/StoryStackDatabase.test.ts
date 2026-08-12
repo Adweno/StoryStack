@@ -100,6 +100,29 @@ describe("StoryStackDatabase", () => {
     });
   });
 
+  it("keeps chapters with a book and isolates bookmarks per user", async () => {
+    const databasePath = path.join(os.tmpdir(), `story-stack-db-${crypto.randomUUID()}.sqlite`);
+    const database = new StoryStackDatabase(databasePath);
+    database.upsertBook({
+      id: "book_with_chapters",
+      sourcePath: "/books/chapters",
+      title: "Book With Chapters",
+      author: "A. Writer",
+      genres: [],
+      chapters: [{ id: "1", title: "Opening", startSeconds: 0, endSeconds: 120 }],
+      addedAt: "2026-07-30T00:00:00.000Z",
+      hidden: false
+    });
+    await database.addLibraryBook({ userId: "user_admin", bookId: "book_with_chapters", addedAt: "2026-07-30T00:00:00.000Z" });
+    const bookmark = database.createBookBookmark({ bookId: "book_with_chapters", userId: "user_admin", positionSeconds: 42, title: "Important" });
+
+    await expect(database.getBook("book_with_chapters")).resolves.toMatchObject({ chapters: [{ title: "Opening", startSeconds: 0, endSeconds: 120 }] });
+    expect(database.listBookBookmarks("book_with_chapters", "user_admin")).toEqual([bookmark]);
+    expect(database.listBookBookmarks("book_with_chapters", "user_reader")).toEqual([]);
+    database.deleteBookBookmark(bookmark.id, "user_admin");
+    expect(database.listBookBookmarks("book_with_chapters", "user_admin")).toEqual([]);
+  });
+
   it("creates a default Favorites shelf and keeps it first", async () => {
     const databasePath = path.join(os.tmpdir(), `story-stack-db-${crypto.randomUUID()}.sqlite`);
     const database = new StoryStackDatabase(databasePath);

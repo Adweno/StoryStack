@@ -1,6 +1,7 @@
 import type {
   Book,
   BookReview,
+  BookBookmark,
   CatalogSettings,
   MetadataEnrichmentResult,
   PlaybackProgress,
@@ -54,6 +55,27 @@ export class ApiClient {
 
   async bookReviews(bookId: string): Promise<BookReviewResponse> {
     return this.get(`/api/books/${encodeURIComponent(bookId)}/reviews`);
+  }
+
+  async bookBookmarks(bookId: string): Promise<BookBookmark[]> {
+    const data = await this.get<{ bookmarks: BookBookmark[] }>(`/api/books/${encodeURIComponent(bookId)}/bookmarks`);
+    return data.bookmarks;
+  }
+
+  async createBookBookmark(bookId: string, input: { positionSeconds: number; title?: string }): Promise<BookBookmark> {
+    const data = await this.post<{ bookmark: BookBookmark }>(`/api/books/${encodeURIComponent(bookId)}/bookmarks`, input);
+    return data.bookmark;
+  }
+
+  async updateBookBookmark(bookId: string, bookmarkId: string, input: { positionSeconds?: number; title?: string }): Promise<BookBookmark> {
+    const data = await this.request<{ bookmark: BookBookmark }>(`/api/books/${encodeURIComponent(bookId)}/bookmarks/${encodeURIComponent(bookmarkId)}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input)
+    });
+    return data.bookmark;
+  }
+
+  async deleteBookBookmark(bookId: string, bookmarkId: string): Promise<void> {
+    await this.request(`/api/books/${encodeURIComponent(bookId)}/bookmarks/${encodeURIComponent(bookmarkId)}`, { method: "DELETE" });
   }
 
   async saveBookReview(bookId: string, input: { rating: number; review: string }): Promise<{ review: BookReview; summary: BookReviewSummary }> {

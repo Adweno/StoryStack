@@ -96,6 +96,7 @@ export class CatalogScanner {
       coverPath: coverFile ? path.join(coverFile.directory, coverFile.name) : undefined,
       audioPath: audioFile ? path.join(audioFile.directory, audioFile.name) : undefined,
       audioTracks,
+      chapters: this.asChapters(metadata.chapters),
       addedAt: this.clock.nowIso(),
       hidden: false
     };
@@ -175,6 +176,24 @@ export class CatalogScanner {
       return value.split(",").map((item) => item.trim()).filter(Boolean);
     }
     return [];
+  }
+
+  private asChapters(value: unknown): NonNullable<Book["chapters"]> | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const chapters = value.flatMap((item, index) => {
+      if (!item || typeof item !== "object") return [];
+      const chapter = item as Record<string, unknown>;
+      const start = this.asNumber(chapter.start ?? chapter.startSeconds);
+      const end = this.asNumber(chapter.end ?? chapter.endSeconds);
+      if (start === undefined || end === undefined || end <= start) return [];
+      return [{
+        id: String(chapter.id ?? `chapter-${index + 1}`),
+        title: this.asString(chapter.title) ?? `Chapter ${index + 1}`,
+        startSeconds: start,
+        endSeconds: end
+      }];
+    });
+    return chapters.length ? chapters : undefined;
   }
 }
 

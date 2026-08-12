@@ -4,6 +4,8 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
   Book,
+  BookBookmark,
+  BookChapter,
   BookReview,
   CatalogSettings,
   PlaybackProgress,
@@ -329,7 +331,8 @@ export class StoryStackDatabase implements LibraryRepository {
         `INSERT INTO books (
           id, sourcePath, title, subtitle, author, narrator, series, seriesOrder, description, genres,
           durationSeconds, publicationYear, coverPath, audioPath, audioTracks, addedAt, hidden
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          , chapters
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           sourcePath = excluded.sourcePath,
           title = excluded.title,
@@ -345,6 +348,7 @@ export class StoryStackDatabase implements LibraryRepository {
           coverPath = excluded.coverPath,
           audioPath = excluded.audioPath,
           audioTracks = excluded.audioTracks,
+          chapters = COALESCE(excluded.chapters, books.chapters),
           hidden = excluded.hidden`
       )
       .run(
@@ -364,7 +368,8 @@ export class StoryStackDatabase implements LibraryRepository {
         targetBook.audioPath ?? null,
         JSON.stringify(targetBook.audioTracks?.length ? targetBook.audioTracks : targetBook.audioPath ? [{ path: targetBook.audioPath }] : []),
         targetBook.addedAt,
-        targetBook.hidden ? 1 : 0
+        targetBook.hidden ? 1 : 0,
+        targetBook.chapters ? JSON.stringify(targetBook.chapters) : null
       );
     return { id: targetBook.id, status: existing ? "updated" : "imported" };
   }
@@ -574,6 +579,38 @@ export class StoryStackDatabase implements LibraryRepository {
       .all(userId) as unknown as PlaybackProgress[];
   }
 
+  listBookBookmarks(bookId: string, userId: string): BookBookmark[] {
+    return this.database
+      .prepare("SELECT id, bookId, userId, positionSeconds, title, createdAt, updatedAt FROM book_bookmarks WHERE bookId = ? AND userId = ? ORDER BY positionSeconds")
+      .all(bookId, userId) as unknown as BookBookmark[];
+  }
+
+  createBookBookmark(input: { bookId: string; userId: string; positionSeconds: number; title?: string }, now = new Date().toISOString()): BookBookmark {
+    const bookmark: BookBookmark = {
+      id: `bookmark_${randomBytes(12).toString("hex")}`,
+      bookId: input.bookId,
+      userId: input.userId,
+      positionSeconds: input.positionSeconds,
+      title: input.title?.trim() || "Bookmark",
+      createdAt: now,
+      updatedAt: now
+    };
+    this.database.prepare("INSERT INTO book_bookmarks (id, bookId, userId, positionSeconds, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(bookmark.id, bookmark.bookId, bookmark.userId, bookmark.positionSeconds, bookmark.title, bookmark.createdAt, bookmark.updatedAt);
+    return bookmark;
+  }
+
+  updateBookBookmark(id: string, userId: string, input: { positionSeconds?: number; title?: string }, now = new Date().toISOString()): BookBookmark | undefined {
+    this.database.prepare("UPDATE book_bookmarks SET positionSeconds = COALESCE(?, positionSeconds), title = COALESCE(?, title), updatedAt = ? WHERE id = ? AND userId = ?")
+      .run(input.positionSeconds ?? null, input.title?.trim() || null, now, id, userId);
+    return this.database.prepare("SELECT id, bookId, userId, positionSeconds, title, createdAt, updatedAt FROM book_bookmarks WHERE id = ? AND userId = ?")
+      .get(id, userId) as BookBookmark | undefined;
+  }
+
+  deleteBookBookmark(id: string, userId: string): void {
+    this.database.prepare("DELETE FROM book_bookmarks WHERE id = ? AND userId = ?").run(id, userId);
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS users (
@@ -637,6 +674,7 @@ export class StoryStackDatabase implements LibraryRepository {
         manualCoverPath TEXT,
         audioPath TEXT,
         audioTracks TEXT,
+        chapters TEXT,
         addedAt TEXT NOT NULL,
         hidden INTEGER NOT NULL DEFAULT 0
       );
@@ -672,6 +710,16 @@ export class StoryStackDatabase implements LibraryRepository {
         PRIMARY KEY (userId, bookId)
       );
 
+      CREATE TABLE IF NOT EXISTS book_bookmarks (
+        id TEXT PRIMARY KEY,
+        bookId TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        positionSeconds REAL NOT NULL,
+        title TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS book_reviews (
         id TEXT PRIMARY KEY,
         bookId TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
@@ -702,6 +750,7 @@ export class StoryStackDatabase implements LibraryRepository {
       CREATE INDEX IF NOT EXISTS idx_library_user ON user_library_books(userId);
       CREATE INDEX IF NOT EXISTS idx_shelves_user ON shelves(userId);
       CREATE INDEX IF NOT EXISTS idx_progress_user ON playback_progress(userId);
+      CREATE INDEX IF NOT EXISTS idx_bookmarks_user_book ON book_bookmarks(userId, bookId);
       CREATE INDEX IF NOT EXISTS idx_reviews_book ON book_reviews(bookId);
       CREATE INDEX IF NOT EXISTS idx_reviews_user ON book_reviews(userId);
       CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(userId);
@@ -719,6 +768,7 @@ export class StoryStackDatabase implements LibraryRepository {
     this.addColumnIfMissing("users", "reviewsEnabled", "INTEGER NOT NULL DEFAULT 1");
     this.addColumnIfMissing("users", "metadataEditorEnabled", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("books", "audioTracks", "TEXT");
+    this.addColumnIfMissing("books", "chapters", "TEXT");
     this.addColumnIfMissing("books", "manualTitle", "TEXT");
     this.addColumnIfMissing("books", "manualSubtitle", "TEXT");
     this.addColumnIfMissing("books", "manualAuthor", "TEXT");
@@ -796,6 +846,7 @@ export class StoryStackDatabase implements LibraryRepository {
       coverPath: row.manualCoverPath ?? row.coverPath ?? undefined,
       audioPath: row.audioPath ?? undefined,
       audioTracks: this.parseAudioTracks(row.audioTracks, row.audioPath),
+      chapters: this.parseChapters(row.chapters),
       addedAt: row.addedAt,
       hidden: Boolean(row.hidden)
     };
@@ -824,6 +875,21 @@ export class StoryStackDatabase implements LibraryRepository {
       }
     }
     return fallbackPath ? [{ path: fallbackPath }] : undefined;
+  }
+
+  private parseChapters(value: string | null): Book["chapters"] {
+    if (!value) return undefined;
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (!Array.isArray(parsed)) return undefined;
+      return parsed.filter((item): item is BookChapter => {
+        if (!item || typeof item !== "object") return false;
+        const chapter = item as Partial<BookChapter>;
+        return typeof chapter.id === "string" && typeof chapter.title === "string" && typeof chapter.startSeconds === "number" && typeof chapter.endSeconds === "number";
+      });
+    } catch {
+      return undefined;
+    }
   }
 
   private withBookReviewSummaries(books: Book[]): Book[] {
@@ -964,6 +1030,7 @@ interface BookRow {
   manualCoverPath: string | null;
   audioPath: string | null;
   audioTracks: string | null;
+  chapters: string | null;
   addedAt: string;
   hidden: number;
 }

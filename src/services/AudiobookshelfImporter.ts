@@ -18,6 +18,8 @@ export class AudiobookshelfImporter {
   importBooks(options: AudiobookshelfImportOptions): Book[] {
     const database = new DatabaseSync(options.databasePath, { readOnly: true });
     try {
+      const bookColumns = database.prepare("PRAGMA table_info(books)").all() as unknown as Array<{ name: string }>;
+      const hasChapters = bookColumns.some((column) => column.name === "chapters");
       const rows = database
         .prepare(
           `SELECT
@@ -34,6 +36,7 @@ export class AudiobookshelfImporter {
              b.duration AS duration,
              b.narrators AS narrators,
              b.audioFiles AS audioFiles,
+             ${hasChapters ? "b.chapters" : "NULL"} AS chapters,
              b.tags AS tags,
              b.genres AS genres,
              (
@@ -83,6 +86,14 @@ export class AudiobookshelfImporter {
     const audioPath = firstAudioPath
       ? this.mapPrefix(firstAudioPath, options.mediaPathPrefix, options.hostMediaPathPrefix)
       : sourcePath;
+    const chapters = this.parseJsonArray<BookChapterRecord>(row.chapters)
+      .map((chapter, index) => {
+        const start = this.toNumber(chapter.start);
+        const end = this.toNumber(chapter.end);
+        if (start === undefined || end === undefined || end <= start) return undefined;
+        return { id: String(chapter.id ?? `chapter-${index + 1}`), title: chapter.title?.trim() || `Chapter ${index + 1}`, startSeconds: start, endSeconds: end };
+      })
+      .filter((chapter): chapter is NonNullable<typeof chapter> => Boolean(chapter));
 
     return {
       id: `abs_${row.itemId}` || this.idFactory.stableBookId(sourcePath),
@@ -100,6 +111,7 @@ export class AudiobookshelfImporter {
       coverPath: row.coverPath ? this.mapCoverPath(row.coverPath, options) : undefined,
       audioPath,
       audioTracks,
+      chapters: chapters.length ? chapters : undefined,
       addedAt: row.itemCreatedAt || new Date().toISOString(),
       hidden: false
     };
@@ -183,6 +195,7 @@ interface AudiobookshelfBookRow {
   duration: number | null;
   narrators: string | null;
   audioFiles: string | null;
+  chapters: string | null;
   tags: string | null;
   genres: string | null;
   authors: string | null;
@@ -196,4 +209,11 @@ interface AudioFileRecord {
     path?: string;
     duration?: number | string | null;
   };
+}
+
+interface BookChapterRecord {
+  id?: string | number;
+  start?: number | string | null;
+  end?: number | string | null;
+  title?: string | null;
 }
