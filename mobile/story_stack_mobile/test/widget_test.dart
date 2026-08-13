@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:story_stack_mobile/main.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('series groups exclude standalone books and sort by series order', () {
     final books = [
       const Book(
@@ -112,5 +117,35 @@ void main() {
     expect(isDownloadArtifactForBook('book.2.audio.part', 'book'), isTrue);
     expect(isDownloadArtifactForBook('book-extended.audio', 'book'), isFalse);
     expect(isDownloadArtifactForBook('book.2.audio', 'book-extended'), isFalse);
+  });
+
+  test('offline sync queue keeps only the latest progress per book', () async {
+    SharedPreferences.setMockInitialValues({});
+    final queue = OfflineSyncQueue('test-progress');
+    await queue.enqueueProgress('book-1', 10, 100);
+    await queue.enqueueProgress('book-1', 50, 100);
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('offlineSyncQueue_test-progress');
+    final data = jsonDecode(raw!) as Map<String, dynamic>;
+    final progress = (data['progress'] as Map<String, dynamic>)['book-1'];
+
+    expect((progress as Map<String, dynamic>)['positionSeconds'], 50);
+  });
+
+  test('offline sync queue preserves bookmark actions', () async {
+    SharedPreferences.setMockInitialValues({});
+    final queue = OfflineSyncQueue('test-bookmarks');
+    final bookmark = await queue.enqueueBookmarkCreate(
+      'book-2',
+      42,
+      'Chapter 2',
+    );
+
+    final queued = await queue.queuedBookmarksFor('book-2');
+
+    expect(queued, hasLength(1));
+    expect(queued.single.id, bookmark.id);
+    expect(queued.single.positionSeconds, 42);
   });
 }

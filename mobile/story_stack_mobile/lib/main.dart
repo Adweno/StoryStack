@@ -655,6 +655,7 @@ class _StoryShellState extends State<StoryShell> {
   final searchController = TextEditingController();
   final player = AudioPlayer();
   late final CastManager castManager;
+  late final OfflineSyncQueue syncQueue;
   final downloads = OfflineBookStore();
   late final LocalDeviceLibraryStore localDeviceLibrary;
   late final LocalDeviceLibraryStore mirroredSourceStore;
@@ -700,6 +701,7 @@ class _StoryShellState extends State<StoryShell> {
   void initState() {
     super.initState();
     castManager = CastManager(widget.api, downloads);
+    syncQueue = OfflineSyncQueue(widget.user.id);
     castManager.addListener(() {
       if (!mounted) return;
       setState(() {});
@@ -736,10 +738,10 @@ class _StoryShellState extends State<StoryShell> {
         unawaited(_saveProgress(forceFinished: !sampleMode));
       }
     });
-    progressTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _saveProgress(),
-    );
+    progressTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_saveProgress());
+      unawaited(_flushOfflineSync());
+    });
     unawaited(_loadAll());
   }
 
@@ -800,6 +802,7 @@ class _StoryShellState extends State<StoryShell> {
         });
         return;
       }
+      await syncQueue.flush(widget.api);
       final library = await widget.api.library();
       final store = await widget.api.store();
       await _cacheBooksForAndroidAuto(library.books);
@@ -1067,12 +1070,24 @@ class _StoryShellState extends State<StoryShell> {
       final bookmarks = book.isLocalDevice
           ? await localDeviceLibrary.loadBookmarks(book.id)
           : await widget.api.bookBookmarks(book.id);
+      final queuedBookmarks = book.isLocalDevice
+          ? const <BookBookmark>[]
+          : await syncQueue.queuedBookmarksFor(book.id);
       if (mounted && playingBook?.id == book.id) {
-        setState(() => playingBookmarks = bookmarks);
+        setState(
+          () => playingBookmarks = [...bookmarks, ...queuedBookmarks]
+            ..sort((a, b) => a.positionSeconds.compareTo(b.positionSeconds)),
+        );
       }
     } catch (_) {
       if (mounted && playingBook?.id == book.id) {
-        setState(() => playingBookmarks = []);
+        unawaited(
+          syncQueue.queuedBookmarksFor(book.id).then((queued) {
+            if (mounted && playingBook?.id == book.id) {
+              setState(() => playingBookmarks = queued);
+            }
+          }),
+        );
       }
     }
   }
@@ -1082,19 +1097,21 @@ class _StoryShellState extends State<StoryShell> {
     if (book == null || restoringPlaybackPosition) return;
     try {
       final position = _displayPosition(book).inSeconds;
+      final title = _chapterTitleAt(book, position);
       final bookmark = book.isLocalDevice
-          ? await localDeviceLibrary.createBookmark(book.id, position, _chapterTitleAt(book, position))
-          : await widget.api.createBookBookmark(
-              book.id,
-              positionSeconds: position,
-              title: _chapterTitleAt(book, position),
-            );
+          ? await localDeviceLibrary.createBookmark(book.id, position, title)
+          : await _createServerBookmark(book.id, position, title);
       if (mounted) {
-        setState(() => playingBookmarks = [...playingBookmarks, bookmark]..sort((a, b) => a.positionSeconds.compareTo(b.positionSeconds)));
+        setState(
+          () => playingBookmarks = [...playingBookmarks, bookmark]
+            ..sort((a, b) => a.positionSeconds.compareTo(b.positionSeconds)),
+        );
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not save bookmark: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not save bookmark: $error')),
+        );
       }
     }
   }
@@ -1104,15 +1121,47 @@ class _StoryShellState extends State<StoryShell> {
     if (book == null) return;
     if (book.isLocalDevice) {
       await localDeviceLibrary.deleteBookmark(book.id, bookmark.id);
+    } else if (bookmark.id.startsWith('queued_bookmark_')) {
+      await syncQueue.removeQueuedBookmark(book.id, bookmark.id);
     } else {
-      await widget.api.deleteBookBookmark(book.id, bookmark.id);
+      try {
+        await widget.api.deleteBookBookmark(book.id, bookmark.id);
+      } catch (_) {
+        await syncQueue.enqueueBookmarkDelete(book.id, bookmark.id);
+      }
     }
-    if (mounted) setState(() => playingBookmarks = playingBookmarks.where((item) => item.id != bookmark.id).toList());
+    if (mounted) {
+      setState(
+        () => playingBookmarks = playingBookmarks
+            .where((item) => item.id != bookmark.id)
+            .toList(),
+      );
+    }
+  }
+
+  Future<BookBookmark> _createServerBookmark(
+    String bookId,
+    int positionSeconds,
+    String title,
+  ) async {
+    try {
+      final bookmark = await widget.api.createBookBookmark(
+        bookId,
+        positionSeconds: positionSeconds,
+        title: title,
+      );
+      await syncQueue.flush(widget.api);
+      return bookmark;
+    } catch (_) {
+      return syncQueue.enqueueBookmarkCreate(bookId, positionSeconds, title);
+    }
   }
 
   String _chapterTitleAt(Book book, int seconds) {
     for (final chapter in book.chapters) {
-      if (seconds >= chapter.startSeconds && seconds < chapter.endSeconds) return chapter.title;
+      if (seconds >= chapter.startSeconds && seconds < chapter.endSeconds) {
+        return chapter.title;
+      }
     }
     return 'Bookmark at ${formatTime(Duration(seconds: seconds))}';
   }
@@ -1187,8 +1236,33 @@ class _StoryShellState extends State<StoryShell> {
         positionSeconds,
         actualDuration.toDouble(),
       );
+      await syncQueue.discardProgress(book.id);
+      await syncQueue.flush(widget.api);
       setStateSafe(() => progressByBook[book.id] = progress);
-    } catch (_) {}
+    } catch (_) {
+      final queuedProgress = PlaybackProgress(
+        userId: widget.user.id,
+        bookId: book.id,
+        positionSeconds: positionSeconds,
+        durationSeconds: actualDuration.toDouble(),
+        status: forceFinished || positionSeconds >= actualDuration * .98
+            ? ProgressStatus.finished
+            : positionSeconds > 0
+            ? ProgressStatus.inProgress
+            : ProgressStatus.notStarted,
+      );
+      setStateSafe(() => progressByBook[book.id] = queuedProgress);
+      await syncQueue.enqueueProgress(
+        book.id,
+        positionSeconds,
+        actualDuration.toDouble(),
+      );
+    }
+  }
+
+  Future<void> _flushOfflineSync() async {
+    if (librarySourceMode == LibrarySourceMode.localDevice) return;
+    await syncQueue.flush(widget.api);
   }
 
   Future<void> _markFinished(Book book) async {
@@ -1204,11 +1278,29 @@ class _StoryShellState extends State<StoryShell> {
       setState(() => progressByBook[book.id] = progress);
       return;
     }
-    final progress = await widget.api.saveProgress(
-      book.id,
-      durationSeconds,
-      durationSeconds,
-    );
+    PlaybackProgress progress;
+    try {
+      progress = await widget.api.saveProgress(
+        book.id,
+        durationSeconds,
+        durationSeconds,
+      );
+      await syncQueue.discardProgress(book.id);
+      await syncQueue.flush(widget.api);
+    } catch (_) {
+      await syncQueue.enqueueProgress(
+        book.id,
+        durationSeconds,
+        durationSeconds,
+      );
+      progress = PlaybackProgress(
+        userId: widget.user.id,
+        bookId: book.id,
+        positionSeconds: durationSeconds,
+        durationSeconds: durationSeconds,
+        status: ProgressStatus.finished,
+      );
+    }
     setState(() => progressByBook[book.id] = progress);
   }
 
@@ -1223,12 +1315,24 @@ class _StoryShellState extends State<StoryShell> {
       setState(() => progressByBook[book.id] = progress);
       return;
     }
-    final progress = await widget.api.saveProgress(
-      book.id,
-      0,
-      (book.durationSeconds ?? progressByBook[book.id]?.durationSeconds)
-          ?.toDouble(),
-    );
+    final durationSeconds =
+        (book.durationSeconds ?? progressByBook[book.id]?.durationSeconds)
+            ?.toDouble();
+    PlaybackProgress progress;
+    try {
+      progress = await widget.api.saveProgress(book.id, 0, durationSeconds);
+      await syncQueue.discardProgress(book.id);
+      await syncQueue.flush(widget.api);
+    } catch (_) {
+      await syncQueue.enqueueProgress(book.id, 0, durationSeconds);
+      progress = PlaybackProgress(
+        userId: widget.user.id,
+        bookId: book.id,
+        positionSeconds: 0,
+        durationSeconds: durationSeconds,
+        status: ProgressStatus.notStarted,
+      );
+    }
     setState(() => progressByBook[book.id] = progress);
   }
 
@@ -1592,8 +1696,10 @@ class _StoryShellState extends State<StoryShell> {
               bookmarks: playingBookmarks,
               onAddBookmark: _addBookmark,
               onDeleteBookmark: _deleteBookmark,
-              onChapter: (seconds) => _seekWhole(playingBook!, Duration(seconds: seconds)),
-              onBookmark: (seconds) => _seekWhole(playingBook!, Duration(seconds: seconds)),
+              onChapter: (seconds) =>
+                  _seekWhole(playingBook!, Duration(seconds: seconds)),
+              onBookmark: (seconds) =>
+                  _seekWhole(playingBook!, Duration(seconds: seconds)),
             )
           : null,
     );
@@ -5155,7 +5261,9 @@ class NowPlayingPanel extends StatelessWidget {
           Text(
             book.title,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
           ),
           Text(book.author),
           const SizedBox(height: 8),
@@ -5226,8 +5334,14 @@ class NowPlayingPanel extends StatelessWidget {
               children: [
                 TabBar(
                   tabs: [
-                    Tab(text: 'Chapters${book.chapters.isNotEmpty ? ' (${book.chapters.length})' : ''}'),
-                    Tab(text: 'Bookmarks${bookmarks.isNotEmpty ? ' (${bookmarks.length})' : ''}'),
+                    Tab(
+                      text:
+                          'Chapters${book.chapters.isNotEmpty ? ' (${book.chapters.length})' : ''}',
+                    ),
+                    Tab(
+                      text:
+                          'Bookmarks${bookmarks.isNotEmpty ? ' (${bookmarks.length})' : ''}',
+                    ),
                   ],
                 ),
                 SizedBox(
@@ -5244,8 +5358,16 @@ class NowPlayingPanel extends StatelessWidget {
                                   dense: true,
                                   contentPadding: EdgeInsets.zero,
                                   leading: Text('${index + 1}'),
-                                  title: Text(chapter.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                  trailing: Text(formatTime(Duration(seconds: chapter.startSeconds))),
+                                  title: Text(
+                                    chapter.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  trailing: Text(
+                                    formatTime(
+                                      Duration(seconds: chapter.startSeconds),
+                                    ),
+                                  ),
                                   onTap: () => onChapter(chapter.startSeconds),
                                 );
                               },
@@ -5262,26 +5384,47 @@ class NowPlayingPanel extends StatelessWidget {
                                       return ListTile(
                                         dense: true,
                                         contentPadding: EdgeInsets.zero,
-                                        title: Text(bookmark.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        title: Text(
+                                          bookmark.title,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                         trailing: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            Text(formatTime(Duration(seconds: bookmark.positionSeconds))),
+                                            Text(
+                                              formatTime(
+                                                Duration(
+                                                  seconds:
+                                                      bookmark.positionSeconds,
+                                                ),
+                                              ),
+                                            ),
                                             IconButton(
-                                              visualDensity: VisualDensity.compact,
-                                              icon: const Icon(Icons.delete_outline, size: 18),
-                                              onPressed: () => onDeleteBookmark(bookmark),
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              icon: const Icon(
+                                                Icons.delete_outline,
+                                                size: 18,
+                                              ),
+                                              onPressed: () =>
+                                                  onDeleteBookmark(bookmark),
                                             ),
                                           ],
                                         ),
-                                        onTap: () => onBookmark(bookmark.positionSeconds),
+                                        onTap: () => onBookmark(
+                                          bookmark.positionSeconds,
+                                        ),
                                       );
                                     },
                                   ),
                           ),
                           OutlinedButton.icon(
                             onPressed: restoringPosition ? null : onAddBookmark,
-                            icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                            icon: const Icon(
+                              Icons.bookmark_add_outlined,
+                              size: 18,
+                            ),
                             label: const Text('Add bookmark'),
                           ),
                         ],
@@ -5386,6 +5529,177 @@ class DownloadProgress extends StatelessWidget {
     height: 22,
     child: CircularProgressIndicator(value: value / 100, strokeWidth: 3),
   );
+}
+
+class OfflineSyncQueue {
+  OfflineSyncQueue(this.userId);
+
+  final String userId;
+  SharedPreferences? _prefs;
+
+  String get _key => 'offlineSyncQueue_$userId';
+
+  Future<void> _init() async {
+    _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  Future<Map<String, dynamic>> _read() async {
+    await _init();
+    final raw = _prefs!.getString(_key);
+    if (raw == null || raw.isEmpty) return <String, dynamic>{};
+    final decoded = jsonDecode(raw);
+    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+  }
+
+  Future<void> _write(Map<String, dynamic> queue) async {
+    await _init();
+    await _prefs!.setString(_key, jsonEncode(queue));
+  }
+
+  Future<void> enqueueProgress(
+    String bookId,
+    double positionSeconds,
+    double? durationSeconds,
+  ) async {
+    final queue = await _read();
+    final progress = Map<String, dynamic>.from(
+      (queue['progress'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    progress[bookId] = {
+      'bookId': bookId,
+      'positionSeconds': positionSeconds,
+      ...durationSeconds == null ? {} : {'durationSeconds': durationSeconds},
+    };
+    queue['progress'] = progress;
+    await _write(queue);
+  }
+
+  Future<void> discardProgress(String bookId) async {
+    final queue = await _read();
+    final progress = Map<String, dynamic>.from(
+      (queue['progress'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    progress.remove(bookId);
+    queue['progress'] = progress;
+    await _write(queue);
+  }
+
+  Future<BookBookmark> enqueueBookmarkCreate(
+    String bookId,
+    int positionSeconds,
+    String title,
+  ) async {
+    final queue = await _read();
+    final bookmark = BookBookmark(
+      id: 'queued_bookmark_${DateTime.now().microsecondsSinceEpoch}',
+      bookId: bookId,
+      positionSeconds: positionSeconds,
+      title: title,
+    );
+    final creates = List<Map<String, dynamic>>.from(
+      ((queue['bookmarkCreates'] as List?) ?? const []).map(
+        (item) => Map<String, dynamic>.from(item as Map),
+      ),
+    );
+    creates.add(bookmark.toJson());
+    queue['bookmarkCreates'] = creates;
+    await _write(queue);
+    return bookmark;
+  }
+
+  Future<List<BookBookmark>> queuedBookmarksFor(String bookId) async {
+    final queue = await _read();
+    return ((queue['bookmarkCreates'] as List?) ?? const [])
+        .map(
+          (item) =>
+              BookBookmark.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .where((bookmark) => bookmark.bookId == bookId)
+        .toList();
+  }
+
+  Future<void> removeQueuedBookmark(String bookId, String bookmarkId) async {
+    final queue = await _read();
+    final creates = ((queue['bookmarkCreates'] as List?) ?? const [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .where((item) => '${item['id']}' != bookmarkId)
+        .toList();
+    queue['bookmarkCreates'] = creates;
+    await _write(queue);
+  }
+
+  Future<void> enqueueBookmarkDelete(String bookId, String bookmarkId) async {
+    final queue = await _read();
+    final deletes = List<Map<String, dynamic>>.from(
+      ((queue['bookmarkDeletes'] as List?) ?? const []).map(
+        (item) => Map<String, dynamic>.from(item as Map),
+      ),
+    );
+    if (!deletes.any((item) => item['bookmarkId'] == bookmarkId)) {
+      deletes.add({'bookId': bookId, 'bookmarkId': bookmarkId});
+    }
+    queue['bookmarkDeletes'] = deletes;
+    await _write(queue);
+  }
+
+  Future<void> flush(StoryStackApi api) async {
+    final queue = await _read();
+    final progress = Map<String, dynamic>.from(
+      (queue['progress'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    for (final entry in progress.entries.toList()) {
+      final item = Map<String, dynamic>.from(entry.value as Map);
+      try {
+        await api.saveProgress(
+          '${item['bookId']}',
+          (item['positionSeconds'] as num).toDouble(),
+          (item['durationSeconds'] as num?)?.toDouble(),
+        );
+        progress.remove(entry.key);
+      } catch (_) {
+        break;
+      }
+    }
+    queue['progress'] = progress;
+
+    final creates = ((queue['bookmarkCreates'] as List?) ?? const [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+    final remainingCreates = <Map<String, dynamic>>[];
+    for (final item in creates) {
+      try {
+        await api.createBookBookmark(
+          '${item['bookId']}',
+          positionSeconds: (item['positionSeconds'] as num).round(),
+          title: '${item['title']}',
+        );
+      } catch (_) {
+        remainingCreates.add(item);
+        remainingCreates.addAll(creates.skip(creates.indexOf(item) + 1));
+        break;
+      }
+    }
+    queue['bookmarkCreates'] = remainingCreates;
+
+    final deletes = ((queue['bookmarkDeletes'] as List?) ?? const [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+    final remainingDeletes = <Map<String, dynamic>>[];
+    for (final item in deletes) {
+      try {
+        await api.deleteBookBookmark(
+          '${item['bookId']}',
+          '${item['bookmarkId']}',
+        );
+      } catch (_) {
+        remainingDeletes.add(item);
+        remainingDeletes.addAll(deletes.skip(deletes.indexOf(item) + 1));
+        break;
+      }
+    }
+    queue['bookmarkDeletes'] = remainingDeletes;
+    await _write(queue);
+  }
 }
 
 class StoryStackApi {
@@ -5569,7 +5883,9 @@ class StoryStackApi {
   );
 
   Future<List<BookBookmark>> bookBookmarks(String bookId) async {
-    final data = await _request('/api/books/${Uri.encodeComponent(bookId)}/bookmarks');
+    final data = await _request(
+      '/api/books/${Uri.encodeComponent(bookId)}/bookmarks',
+    );
     return ((data['bookmarks'] as List?) ?? [])
         .map((item) => BookBookmark.fromJson(item as Map<String, dynamic>))
         .toList();
@@ -5751,7 +6067,9 @@ class StoryStackApi {
       final responseBody = response.body.trim();
       if (responseBody.startsWith('<!doctype') ||
           responseBody.startsWith('<html')) {
-        throw Exception('The Story Stack server returned an unexpected page. Please refresh and try again.');
+        throw Exception(
+          'The Story Stack server returned an unexpected page. Please refresh and try again.',
+        );
       }
       final data = responseBody.isEmpty
           ? <String, dynamic>{}
@@ -5764,7 +6082,9 @@ class StoryStackApi {
     final responseBody = response.body.trim();
     if (responseBody.startsWith('<!doctype') ||
         responseBody.startsWith('<html')) {
-      throw Exception('The Story Stack server returned an unexpected page. Please refresh and try again.');
+      throw Exception(
+        'The Story Stack server returned an unexpected page. Please refresh and try again.',
+      );
     }
     return jsonDecode(responseBody);
   }
@@ -6326,15 +6646,23 @@ class LocalDeviceLibraryStore {
 
   Future<List<BookBookmark>> loadBookmarks(String bookId) async {
     await init();
-    final data = jsonDecode(_prefs!.getString(_bookmarksKey) ?? '{}') as Map<String, dynamic>;
+    final data =
+        jsonDecode(_prefs!.getString(_bookmarksKey) ?? '{}')
+            as Map<String, dynamic>;
     return ((data[bookId] as List?) ?? [])
         .map((item) => BookBookmark.fromJson(item as Map<String, dynamic>))
         .toList();
   }
 
-  Future<BookBookmark> createBookmark(String bookId, int positionSeconds, String title) async {
+  Future<BookBookmark> createBookmark(
+    String bookId,
+    int positionSeconds,
+    String title,
+  ) async {
     await init();
-    final all = jsonDecode(_prefs!.getString(_bookmarksKey) ?? '{}') as Map<String, dynamic>;
+    final all =
+        jsonDecode(_prefs!.getString(_bookmarksKey) ?? '{}')
+            as Map<String, dynamic>;
     final bookmark = BookBookmark(
       id: 'local_bookmark_${DateTime.now().microsecondsSinceEpoch}',
       bookId: bookId,
@@ -6349,9 +6677,14 @@ class LocalDeviceLibraryStore {
 
   Future<void> deleteBookmark(String bookId, String bookmarkId) async {
     await init();
-    final all = jsonDecode(_prefs!.getString(_bookmarksKey) ?? '{}') as Map<String, dynamic>;
+    final all =
+        jsonDecode(_prefs!.getString(_bookmarksKey) ?? '{}')
+            as Map<String, dynamic>;
     final current = await loadBookmarks(bookId);
-    all[bookId] = current.where((item) => item.id != bookmarkId).map((item) => item.toJson()).toList();
+    all[bookId] = current
+        .where((item) => item.id != bookmarkId)
+        .map((item) => item.toJson())
+        .toList();
     await _prefs!.setString(_bookmarksKey, jsonEncode(all));
   }
 
@@ -6703,8 +7036,8 @@ class OfflineBookStore {
         final url = trackCount == 1
             ? api.audioUrl(book.id)
             : api.audioTrackUrl(book.id, index);
-        final localUrl = localNetworkAddress == null ||
-                localNetworkAddress.trim().isEmpty
+        final localUrl =
+            localNetworkAddress == null || localNetworkAddress.trim().isEmpty
             ? null
             : api.mediaUrlAt(
                 localNetworkAddress,
@@ -6810,7 +7143,9 @@ class OfflineBookStore {
     try {
       final probe = await client.send(probeRequest);
       final totalBytes = _contentRangeTotal(probe.headers['content-range']);
-      if (probe.statusCode != 206 || totalBytes == null || totalBytes < 16 * 1024 * 1024) {
+      if (probe.statusCode != 206 ||
+          totalBytes == null ||
+          totalBytes < 16 * 1024 * 1024) {
         await probe.stream.drain();
         await _downloadFile(
           client: client,
@@ -6823,7 +7158,10 @@ class OfflineBookStore {
       }
       await probe.stream.drain();
 
-      final chunkCount = min(8, max(2, (totalBytes / (16 * 1024 * 1024)).ceil()));
+      final chunkCount = min(
+        8,
+        max(2, (totalBytes / (16 * 1024 * 1024)).ceil()),
+      );
       final chunkSize = (totalBytes / chunkCount).ceil();
       final receivedByChunk = List<int>.filled(chunkCount, 0);
       final chunkFiles = List.generate(
@@ -6832,9 +7170,15 @@ class OfflineBookStore {
       );
 
       void reportProgress() {
-        final received = receivedByChunk.fold<int>(0, (sum, value) => sum + value);
+        final received = receivedByChunk.fold<int>(
+          0,
+          (sum, value) => sum + value,
+        );
         onProgress(
-          _DownloadPartProgress(receivedBytes: received, totalBytes: totalBytes),
+          _DownloadPartProgress(
+            receivedBytes: received,
+            totalBytes: totalBytes,
+          ),
         );
       }
 
@@ -6882,7 +7226,12 @@ class OfflineBookStore {
         for (final chunk in chunkFiles) {
           if (await chunk.exists()) await chunk.delete();
         }
-        onProgress(_DownloadPartProgress(receivedBytes: totalBytes, totalBytes: totalBytes));
+        onProgress(
+          _DownloadPartProgress(
+            receivedBytes: totalBytes,
+            totalBytes: totalBytes,
+          ),
+        );
       } on DownloadCancelled {
         for (final chunk in chunkFiles) {
           if (await chunk.exists()) await chunk.delete();
@@ -7048,10 +7397,7 @@ class OfflineBookStore {
 
   Future<void> remove(String bookId) async {
     final files = root!.listSync().whereType<File>().where(
-      (file) => isDownloadArtifactForBook(
-        file.uri.pathSegments.last,
-        bookId,
-      ),
+      (file) => isDownloadArtifactForBook(file.uri.pathSegments.last, bookId),
     );
     for (final file in files) {
       if (await file.exists()) await file.delete();
@@ -7065,10 +7411,9 @@ class OfflineBookStore {
 bool isDownloadArtifactForBook(String fileName, String bookId) {
   final id = RegExp.escape(bookId);
   return RegExp(
-    r'^' + id + r'\.audio(?:\.part(?:\.\d+)?)?$',
-  ).hasMatch(fileName) || RegExp(
-    r'^' + id + r'\.\d+\.audio(?:\.part)?$',
-  ).hasMatch(fileName);
+        r'^' + id + r'\.audio(?:\.part(?:\.\d+)?)?$',
+      ).hasMatch(fileName) ||
+      RegExp(r'^' + id + r'\.\d+\.audio(?:\.part)?$').hasMatch(fileName);
 }
 
 class DownloadCancelled implements Exception {}
@@ -7266,7 +7611,12 @@ class Book {
 }
 
 class BookChapter {
-  const BookChapter({required this.id, required this.title, required this.startSeconds, required this.endSeconds});
+  const BookChapter({
+    required this.id,
+    required this.title,
+    required this.startSeconds,
+    required this.endSeconds,
+  });
   final String id;
   final String title;
   final int startSeconds;
@@ -7277,11 +7627,21 @@ class BookChapter {
     startSeconds: (json['startSeconds'] as num?)?.round() ?? 0,
     endSeconds: (json['endSeconds'] as num?)?.round() ?? 0,
   );
-  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'startSeconds': startSeconds, 'endSeconds': endSeconds};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'startSeconds': startSeconds,
+    'endSeconds': endSeconds,
+  };
 }
 
 class BookBookmark {
-  const BookBookmark({required this.id, required this.bookId, required this.positionSeconds, required this.title});
+  const BookBookmark({
+    required this.id,
+    required this.bookId,
+    required this.positionSeconds,
+    required this.title,
+  });
   final String id;
   final String bookId;
   final int positionSeconds;
@@ -7292,7 +7652,12 @@ class BookBookmark {
     positionSeconds: (json['positionSeconds'] as num?)?.round() ?? 0,
     title: '${json['title'] ?? 'Bookmark'}',
   );
-  Map<String, dynamic> toJson() => {'id': id, 'bookId': bookId, 'positionSeconds': positionSeconds, 'title': title};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'bookId': bookId,
+    'positionSeconds': positionSeconds,
+    'title': title,
+  };
 }
 
 class BookAudioTrack {
