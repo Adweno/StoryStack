@@ -8,15 +8,8 @@ export interface BookBrowseGroup {
   books: Book[];
 }
 
-export interface BookBrowserOptions {
-  includeStandaloneSeries?: boolean;
-}
-
 export class BookBrowser {
-  constructor(
-    private readonly books: Book[],
-    private readonly options: BookBrowserOptions = {}
-  ) {}
+  constructor(private readonly books: Book[]) {}
 
   browse(mode: BookBrowseMode, query = ""): BookBrowseGroup[] {
     const filteredBooks = this.filterBooks(query);
@@ -100,10 +93,7 @@ export class BookBrowser {
 
   private valuesForMode(book: Book, mode: Exclude<BookBrowseMode, "title">): string[] {
     if (mode === "series") {
-      if (book.series) {
-        return [book.series];
-      }
-      return this.options.includeStandaloneSeries === false ? [] : ["Standalone"];
+      return book.series?.trim() ? [book.series] : [];
     }
     if (mode === "author") {
       return this.splitList(book.author || "Unknown Author");
@@ -132,12 +122,6 @@ export class BookBrowser {
     }
     if (right === "#") {
       return 1;
-    }
-    if (left === "Standalone") {
-      return 1;
-    }
-    if (right === "Standalone") {
-      return -1;
     }
     return left.localeCompare(right);
   }

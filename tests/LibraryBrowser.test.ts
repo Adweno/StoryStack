@@ -17,11 +17,10 @@ describe("BookBrowser", () => {
     expect(groups.find((group) => group.label === "A")?.books[0].title).toBe("A Quiet Machine");
   });
 
-  it("groups by series and keeps standalone books discoverable", () => {
+  it("groups only books that belong to a series", () => {
     const groups = new BookBrowser(books).browse("series");
 
-    expect(groups.map((group) => group.label)).toEqual(["Ash Road", "Harbor Lights", "Standalone"]);
-    expect(groups.find((group) => group.label === "Standalone")?.books).toHaveLength(2);
+    expect(groups.map((group) => group.label)).toEqual(["Ash Road", "Harbor Lights"]);
   });
 
   it("orders books inside a series by release year", () => {
@@ -32,12 +31,6 @@ describe("BookBrowser", () => {
     ]).browse("series");
 
     expect(groups.find((group) => group.label === "Release Order")?.books.map((book) => book.id)).toEqual(["early", "late", "missing"]);
-  });
-
-  it("can hide standalone books from Store series browsing", () => {
-    const groups = new BookBrowser(books, { includeStandaloneSeries: false }).browse("series");
-
-    expect(groups.map((group) => group.label)).toEqual(["Ash Road", "Harbor Lights"]);
   });
 
   it("groups books by each listed author", () => {

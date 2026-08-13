@@ -2341,8 +2341,8 @@ function BookCollectionBrowser({
   variant: "library" | "store";
 }) {
   const groups = useMemo(
-    () => new BookBrowser(books, { includeStandaloneSeries: variant !== "store" }).browse(browseMode, query),
-    [books, browseMode, query, variant]
+    () => new BookBrowser(books).browse(browseMode, query),
+    [books, browseMode, query]
   );
   const selectedGroup = groups.find((group) => group.key === categoryKey);
   const titleBooks = useMemo(() => groups.flatMap((group) => group.books), [groups]);
