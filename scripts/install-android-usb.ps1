@@ -3,8 +3,11 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $repoRoot "mobile\story_stack_mobile"
 $apkPath = Join-Path $mobileRoot "build\app\outputs\flutter-apk\app-debug.apk"
-$preferredFlutter = "C:\Users\adamw\.puro\envs\stable\flutter\bin\flutter.bat"
-$flutter = if (Test-Path $preferredFlutter) { $preferredFlutter } else { "flutter" }
+$flutter = if ($env:FLUTTER_BIN) { $env:FLUTTER_BIN } else { "flutter" }
+
+if (-not (Test-Path $flutter) -and -not (Get-Command $flutter -ErrorAction SilentlyContinue)) {
+  throw "Flutter was not found. Install Flutter or set FLUTTER_BIN to the Flutter executable path."
+}
 
 Push-Location $mobileRoot
 try {
