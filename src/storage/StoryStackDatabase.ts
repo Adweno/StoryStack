@@ -986,7 +986,7 @@ export class StoryStackDatabase implements LibraryRepository {
       return { mode: "device", publicUrl: "", status: "not_configured", message: "Local device mode reads audiobooks from a folder on this device. Server sync is not used.", checkedAt };
     }
     if (!publicUrl) {
-      return { mode: input.mode, publicUrl, status: "not_configured", message: "Add a Cloudflare Tunnel or public HTTPS address before inviting remote users.", checkedAt };
+      return { mode: input.mode, publicUrl, status: "not_configured", message: "Add a public HTTPS address, reverse proxy, or VPN connection before inviting remote users.", checkedAt };
     }
     if (isPrivateUrl(publicUrl)) {
       return {

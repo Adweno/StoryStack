@@ -1,6 +1,8 @@
 package com.storystack.story_stack_mobile.auto
 
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -43,12 +45,6 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         session = MediaSessionCompat(this, "StoryStackAutoService").apply {
             setCallback(SessionCallback())
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
-            setExtras(
-                Bundle().apply {
-                    putBoolean(RESERVE_SKIP_TO_PREVIOUS_SLOT, true)
-                    putBoolean(RESERVE_SKIP_TO_NEXT_SLOT, true)
-                }
-            )
             isActive = true
         }
         sessionToken = session.sessionToken
@@ -189,6 +185,13 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         stopProgressSync()
         player?.release()
         setPlaybackState(PlaybackStateCompat.STATE_BUFFERING)
+        val preferences = flutterPrefs()
+        val savedPositionSeconds = preferences.getLong(
+            "flutter.androidAutoProgress_${book.id}",
+            preferences.getLong("androidAutoProgress_${book.id}", 0L)
+        )
+        val savedPositionMs = savedPositionSeconds
+            .coerceAtLeast(0L) * 1000L
 
         val nextPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(
@@ -247,19 +250,22 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             nextPlayer.setMediaItems(mediaItems)
         }
         player = nextPlayer
-        nextPlayer.playWhenReady = true
         nextPlayer.prepare()
+        if (savedPositionMs > 0L) {
+            nextPlayer.seekTo(savedPositionMs)
+        }
+        nextPlayer.playWhenReady = true
     }
 
     private fun setMetadata(book: AutoBook) {
-        val metadata = MediaMetadataCompat.Builder()
+        val builder = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "book:${book.id}")
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, book.title)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, book.author)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, book.series ?: "Story Stack")
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (book.durationSeconds ?: 0) * 1000L)
-            .build()
-        session.setMetadata(metadata)
+        coverBitmap(book)?.let { builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
+        session.setMetadata(builder.build())
     }
 
     private fun setPlaybackState(state: Int) {
@@ -273,8 +279,6 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             PlaybackStateCompat.ACTION_PLAY_PAUSE or
             PlaybackStateCompat.ACTION_STOP or
             PlaybackStateCompat.ACTION_SEEK_TO or
-            PlaybackStateCompat.ACTION_REWIND or
-            PlaybackStateCompat.ACTION_FAST_FORWARD or
             PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
             PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
             PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID
@@ -282,8 +286,6 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             PlaybackStateCompat.Builder()
                 .setActions(actions)
                 .setState(state, currentPosition, 1f)
-                .addCustomAction(SKIP_BACK_ACTION, "Back 30", android.R.drawable.ic_media_rew)
-                .addCustomAction(SKIP_FORWARD_ACTION, "Forward 30", android.R.drawable.ic_media_ff)
                 .build()
         )
     }
@@ -324,11 +326,11 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             book.durationSeconds?.toDouble()
         }
         flutterPrefs().edit()
-            .putLong("androidAutoProgress_${book.id}", positionSeconds.toLong())
+            .putLong("flutter.androidAutoPendingProgress_${book.id}", positionSeconds.toLong())
             .apply()
         if (durationSeconds != null && finished) {
             flutterPrefs().edit()
-                .putLong("androidAutoProgress_${book.id}", durationSeconds.toLong())
+                .putLong("flutter.androidAutoPendingProgress_${book.id}", durationSeconds.toLong())
                 .apply()
         }
     }
@@ -351,13 +353,19 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     }
 
     private fun AutoBook.toPlayableItem(): MediaBrowserCompat.MediaItem {
-        val description = MediaDescriptionCompat.Builder()
+        val builder = MediaDescriptionCompat.Builder()
             .setMediaId("book:$id")
             .setTitle(title)
             .setSubtitle(author)
             .setDescription(series)
-            .build()
-        return MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+        coverBitmap(this)?.let { builder.setIconBitmap(it) }
+        return MediaBrowserCompat.MediaItem(builder.build(), MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+    }
+
+    private fun coverBitmap(book: AutoBook): Bitmap? {
+        val cover = File(downloadRoot(), "${book.id}.cover")
+        if (!cover.isFile) return null
+        return runCatching { BitmapFactory.decodeFile(cover.absolutePath) }.getOrNull()
     }
 
     private fun messageItem(mediaId: String, title: String, subtitle: String): MediaBrowserCompat.MediaItem {

@@ -467,7 +467,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'On home Wi-Fi, downloads use this address automatically. Cloudflare is used away from home.',
+                              'On home Wi-Fi, downloads use this address automatically. The remote address is used away from home.',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ],
@@ -766,6 +766,10 @@ class _StoryShellState extends State<StoryShell> {
       error = null;
     });
     try {
+      // The remote library backfill uses the downloaded-book index. Wait for
+      // it before loading the library so existing downloads are eligible for
+      // cover caching on the first launch after an update.
+      await downloads.init();
       await localDeviceLibrary.init();
       final localSource = await localDeviceLibrary.loadSource();
       final localScan = await localDeviceLibrary.loadScanState();
@@ -783,7 +787,12 @@ class _StoryShellState extends State<StoryShell> {
               (book) => book.copyWith(inLibrary: libraryIds.contains(book.id)),
             )
             .toList();
-        final progress = await localDeviceLibrary.loadProgress();
+        final progress = await _consumeAndroidAutoProgress(
+          await localDeviceLibrary.loadProgress(),
+          books: selectedBooks,
+          localDevice: true,
+        );
+        await _publishAndroidAutoProgress(progress);
         setStateSafe(() {
           librarySourceMode = localSource;
           remoteAccessAddress = sourceAddresses.remoteAccessAddress;
@@ -806,12 +815,28 @@ class _StoryShellState extends State<StoryShell> {
       final library = await widget.api.library();
       final store = await widget.api.store();
       await _cacheBooksForAndroidAuto(library.books);
+      unawaited(
+        downloads.cacheMissingCovers(
+          library.books,
+          widget.api,
+          localNetworkAddress: sourceAddresses.localNetworkAddress,
+        ),
+      );
       final userShelves = await ensureDefaultShelf(
         widget.api,
         await widget.api.shelves(),
       );
       final nextShelfBookCounts = await _loadShelfBookCounts(userShelves);
       final sortedStore = sortBooks(store);
+      final remoteProgress = {
+        for (final item in library.progress) item.bookId: item,
+      };
+      final mergedProgress = await _consumeAndroidAutoProgress(
+        remoteProgress,
+        books: library.books,
+        localDevice: false,
+      );
+      await _publishAndroidAutoProgress(mergedProgress);
       setStateSafe(() {
         librarySourceMode = localSource;
         remoteAccessAddress = sourceAddresses.remoteAccessAddress;
@@ -823,9 +848,7 @@ class _StoryShellState extends State<StoryShell> {
             !sortedStore.any((book) => book.id == featuredStoreBook!.id)) {
           featuredStoreBook = _randomStoreBook(sortedStore);
         }
-        progressByBook = {
-          for (final item in library.progress) item.bookId: item,
-        };
+        progressByBook = mergedProgress;
         shelves = userShelves;
         shelfBookCounts = nextShelfBookCounts;
         loading = false;
@@ -844,6 +867,56 @@ class _StoryShellState extends State<StoryShell> {
       'androidAutoBookCatalog',
       jsonEncode(books.map((book) => book.toJson()).toList()),
     );
+  }
+
+  Future<Map<String, PlaybackProgress>> _consumeAndroidAutoProgress(
+    Map<String, PlaybackProgress> progress, {
+    required Iterable<Book> books,
+    required bool localDevice,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final merged = {...progress};
+    final booksById = {for (final book in books) book.id: book};
+    for (final bookId in downloadedBookIds) {
+      final nativePosition = prefs.getInt('androidAutoPendingProgress_$bookId');
+      if (nativePosition == null) continue;
+      final book = booksById[bookId];
+      final duration =
+          merged[bookId]?.durationSeconds ?? book?.durationSeconds?.toDouble();
+      try {
+        final saved = localDevice
+            ? await localDeviceLibrary.saveProgress(
+                bookId,
+                nativePosition.toDouble(),
+                duration,
+              )
+            : await widget.api.saveProgress(
+                bookId,
+                nativePosition.toDouble(),
+                duration,
+              );
+        merged[bookId] = saved;
+        await syncQueue.discardProgress(bookId);
+        await prefs.remove('androidAutoPendingProgress_$bookId');
+      } catch (_) {
+        // Keep the handoff key so a later online app launch can retry it.
+      }
+    }
+    return merged;
+  }
+
+  Future<void> _publishAndroidAutoProgress(
+    Map<String, PlaybackProgress> progress,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final bookId in downloadedBookIds) {
+      final item = progress[bookId];
+      if (item == null) continue;
+      await prefs.setInt(
+        'androidAutoProgress_$bookId',
+        item.positionSeconds.round(),
+      );
+    }
   }
 
   Future<Map<String, int>> _loadShelfBookCounts(List<Shelf> shelves) async {
@@ -4811,7 +4884,7 @@ class ConnectionModePicker extends StatelessWidget {
           selected: mode == RemoteAccessMode.cloudflare,
           icon: Icons.cloud_outlined,
           title: 'Remote Access',
-          subtitle: 'Cloudflare Tunnel or another public HTTPS address.',
+          subtitle: 'A public HTTPS address, reverse proxy, or VPN connection.',
           onTap: () => onChanged(RemoteAccessMode.cloudflare),
         ),
         ConnectionModeTile(
@@ -4915,7 +4988,7 @@ class LibrarySourcePicker extends StatelessWidget {
           selected: mode == LibrarySourceMode.remoteAccess,
           icon: Icons.cloud_outlined,
           title: 'Remote Access',
-          subtitle: 'Use your Story Stack server through Cloudflare.',
+          subtitle: 'Use your Story Stack server from any network.',
           onTap: () => onChanged(LibrarySourceMode.remoteAccess),
         ),
         LibrarySourceTile(
@@ -7069,6 +7142,7 @@ class OfflineBookStore {
         download: downloadTrack,
       );
       _throwIfCancelled(client);
+      await _cacheCover(book, api, localNetworkAddress: localNetworkAddress);
       bookIds.add(book.id);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setStringList('downloadedBookIds', bookIds.toList());
@@ -7081,6 +7155,68 @@ class OfflineBookStore {
     } finally {
       _activeClients.remove(book.id);
       _cancelledClients.remove(client);
+      client.close();
+    }
+  }
+
+  Future<void> cacheMissingCovers(
+    Iterable<Book> books,
+    StoryStackApi api, {
+    String? localNetworkAddress,
+  }) async {
+    for (final book in books) {
+      final cover = File('${root!.path}/${book.id}.cover');
+      if (!bookIds.contains(book.id) ||
+          (await cover.exists() && await cover.length() > 0)) {
+        continue;
+      }
+      try {
+        await _cacheCover(book, api, localNetworkAddress: localNetworkAddress);
+      } catch (_) {
+        // Artwork is optional and must not affect offline audio.
+      }
+    }
+  }
+
+  Future<void> _cacheCover(
+    Book book,
+    StoryStackApi api, {
+    String? localNetworkAddress,
+  }) async {
+    // A server-provided coverPath is metadata, not proof that the image is
+    // available in the offline download directory. Local-device books manage
+    // their own artwork and should not be fetched from the server.
+    if (book.isLocalDevice) return;
+    final cover = File('${root!.path}/${book.id}.cover');
+    if (await cover.exists() && await cover.length() > 0) return;
+
+    final client = http.Client();
+    try {
+      final remoteUrl = api.coverUrl(book.id);
+      final localUrl =
+          localNetworkAddress == null || localNetworkAddress.trim().isEmpty
+          ? null
+          : api.mediaUrlAt(
+              localNetworkAddress,
+              '/media/books/${Uri.encodeComponent(book.id)}/cover',
+            );
+      for (final url in [localUrl, remoteUrl].whereType<String>()) {
+        try {
+          final response = await client.get(
+            Uri.parse(url),
+            headers: api.authHeaders,
+          );
+          if (response.statusCode >= 200 &&
+              response.statusCode < 300 &&
+              response.bodyBytes.isNotEmpty) {
+            await cover.writeAsBytes(response.bodyBytes, flush: true);
+            return;
+          }
+        } catch (_) {
+          // Fall back to the public address if the LAN address is unavailable.
+        }
+      }
+    } finally {
       client.close();
     }
   }
