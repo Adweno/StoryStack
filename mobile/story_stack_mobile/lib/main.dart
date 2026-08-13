@@ -1091,7 +1091,6 @@ class _StoryShellState extends State<StoryShell> {
             );
       if (mounted) {
         setState(() => playingBookmarks = [...playingBookmarks, bookmark]..sort((a, b) => a.positionSeconds.compareTo(b.positionSeconds)));
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bookmark saved.')));
       }
     } catch (error) {
       if (mounted) {
@@ -5118,7 +5117,7 @@ class NowPlayingPanel extends StatelessWidget {
     final timeLeft = duration > position ? duration - position : Duration.zero;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14),
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
       constraints: const BoxConstraints(maxWidth: 560),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor.withValues(alpha: 0.98),
@@ -5130,13 +5129,14 @@ class NowPlayingPanel extends StatelessWidget {
         children: [
           Align(
             alignment: Alignment.centerRight,
-            child: IconButton.outlined(
+            child: IconButton(
               onPressed: onClose,
+              tooltip: 'Close player',
               icon: const Icon(Icons.close),
             ),
           ),
           SizedBox(
-            width: 230,
+            width: 170,
             child: BookCover(
               api: StoryStackApi.current,
               book: book,
@@ -5144,7 +5144,7 @@ class NowPlayingPanel extends StatelessWidget {
               finished: false,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           Text(
             'NOW PLAYING',
             style: Theme.of(context).textTheme.labelLarge?.copyWith(
@@ -5155,56 +5155,10 @@ class NowPlayingPanel extends StatelessWidget {
           Text(
             book.title,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.headlineMedium,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
           ),
           Text(book.author),
-          const SizedBox(height: 10),
-          if (book.chapters.isNotEmpty || bookmarks.isNotEmpty) ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text('Chapters & Bookmarks', style: Theme.of(context).textTheme.titleMedium),
-            ),
-            const SizedBox(height: 4),
-            SizedBox(
-              height: 150,
-              child: ListView(
-                children: [
-                  for (final chapter in book.chapters)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.menu_book_outlined),
-                      title: Text(chapter.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      trailing: Text(formatTime(Duration(seconds: chapter.startSeconds))),
-                      onTap: () => onChapter(chapter.startSeconds),
-                    ),
-                  for (final bookmark in bookmarks)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.bookmark),
-                      title: Text(bookmark.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      trailing: Wrap(
-                        spacing: 2,
-                        children: [
-                          Text(formatTime(Duration(seconds: bookmark.positionSeconds))),
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                            onPressed: () => onDeleteBookmark(bookmark),
-                          ),
-                        ],
-                      ),
-                      onTap: () => onBookmark(bookmark.positionSeconds),
-                    ),
-                ],
-              ),
-            ),
-          ],
-          OutlinedButton.icon(
-            onPressed: restoringPosition ? null : onAddBookmark,
-            icon: const Icon(Icons.bookmark_add_outlined),
-            label: const Text('Bookmark current position'),
-          ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Row(
             children: [
               Text(formatTime(position)),
@@ -5264,6 +5218,79 @@ class NowPlayingPanel extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          DefaultTabController(
+            length: 2,
+            child: Column(
+              children: [
+                TabBar(
+                  tabs: [
+                    Tab(text: 'Chapters${book.chapters.isNotEmpty ? ' (${book.chapters.length})' : ''}'),
+                    Tab(text: 'Bookmarks${bookmarks.isNotEmpty ? ' (${bookmarks.length})' : ''}'),
+                  ],
+                ),
+                SizedBox(
+                  height: 150,
+                  child: TabBarView(
+                    children: [
+                      book.chapters.isEmpty
+                          ? const Center(child: Text('No chapters available.'))
+                          : ListView.builder(
+                              itemCount: book.chapters.length,
+                              itemBuilder: (context, index) {
+                                final chapter = book.chapters[index];
+                                return ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Text('${index + 1}'),
+                                  title: Text(chapter.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  trailing: Text(formatTime(Duration(seconds: chapter.startSeconds))),
+                                  onTap: () => onChapter(chapter.startSeconds),
+                                );
+                              },
+                            ),
+                      Column(
+                        children: [
+                          Expanded(
+                            child: bookmarks.isEmpty
+                                ? const Center(child: Text('No bookmarks yet.'))
+                                : ListView.builder(
+                                    itemCount: bookmarks.length,
+                                    itemBuilder: (context, index) {
+                                      final bookmark = bookmarks[index];
+                                      return ListTile(
+                                        dense: true,
+                                        contentPadding: EdgeInsets.zero,
+                                        title: Text(bookmark.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(formatTime(Duration(seconds: bookmark.positionSeconds))),
+                                            IconButton(
+                                              visualDensity: VisualDensity.compact,
+                                              icon: const Icon(Icons.delete_outline, size: 18),
+                                              onPressed: () => onDeleteBookmark(bookmark),
+                                            ),
+                                          ],
+                                        ),
+                                        onTap: () => onBookmark(bookmark.positionSeconds),
+                                      );
+                                    },
+                                  ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: restoringPosition ? null : onAddBookmark,
+                            icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                            label: const Text('Add bookmark'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -5724,9 +5751,7 @@ class StoryStackApi {
       final responseBody = response.body.trim();
       if (responseBody.startsWith('<!doctype') ||
           responseBody.startsWith('<html')) {
-        throw Exception(
-          'This Story Stack server needs to be updated before Chromecast can be used.',
-        );
+        throw Exception('The Story Stack server returned an unexpected page. Please refresh and try again.');
       }
       final data = responseBody.isEmpty
           ? <String, dynamic>{}
@@ -5739,9 +5764,7 @@ class StoryStackApi {
     final responseBody = response.body.trim();
     if (responseBody.startsWith('<!doctype') ||
         responseBody.startsWith('<html')) {
-      throw Exception(
-        'This Story Stack server needs to be updated before Chromecast can be used.',
-      );
+      throw Exception('The Story Stack server returned an unexpected page. Please refresh and try again.');
     }
     return jsonDecode(responseBody);
   }

@@ -2,10 +2,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-feature
+        android:name="android.hardware.type.automotive"
+        android:required="false" />
     <application
         android:label="Story Stack"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:appCategory="audio"
         android:usesCleartextTraffic="true">
         <meta-data
             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
@@ -54,7 +59,7 @@
             android:name=".auto.StoryStackAutoService"
             android:enabled="true"
             android:exported="true"
-            android:permission="android.permission.BIND_MEDIA_BROWSER"
+            android:label="Story Stack"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />

@@ -16,14 +16,10 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media.MediaBrowserServiceCompat
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 import org.json.JSONArray
 import org.json.JSONObject
@@ -87,12 +83,11 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         // Android Auto is intentionally offline-only. Do not make the car
         // interface wait on authentication, Cloudflare, or the full server
         // catalog while the phone is connected to the vehicle.
-        val library = downloadedBooks(loadCachedLibrary())
+        val library = downloadedBooks()
         lastLibrary = library
         return when {
             parentId == ROOT_ID -> rootItems()
-            parentId == RECENT_ID -> library.sortedByDescending { it.addedAt }.take(BROWSE_LIMIT).map { it.toPlayableItem() }
-            parentId == DOWNLOADS_ID -> library.map { it.toPlayableItem() }
+            parentId == BOOKS_ID -> library.map { it.toPlayableItem() }
             parentId == SERIES_ID -> groupedItems("series", library.filter { !it.series.isNullOrBlank() && it.series != "Standalone" }, { it.series.orEmpty() })
             parentId == AUTHORS_ID -> groupedItems("author", library, { it.author })
             parentId.startsWith("$SERIES_PREFIX:") -> booksForGroup(parentId, library, "series")
@@ -103,10 +98,9 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
 
     private fun rootItems(): List<MediaBrowserCompat.MediaItem> {
         return listOf(
-            browsable(RECENT_ID, "Recently Added", "Your newest saved books"),
+            browsable(BOOKS_ID, "Books", "All books downloaded to this device"),
             browsable(SERIES_ID, "Series", "Browse saved books by series"),
-            browsable(AUTHORS_ID, "Authors", "Browse saved books by author"),
-            browsable(DOWNLOADS_ID, "Downloads", "Books saved on this device")
+            browsable(AUTHORS_ID, "Authors", "Browse saved books by author")
         )
     }
 
@@ -133,9 +127,9 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         return books.map { it.toPlayableItem() }
     }
 
-    private fun downloadedBooks(library: List<AutoBook>): List<AutoBook> {
+    private fun downloadedBooks(): List<AutoBook> {
         val root = downloadRoot()
-        return library
+        return loadDownloadedBookMetadata()
             .filter { isFullyDownloaded(root, it) }
             .sortedBy { it.title }
     }
@@ -148,19 +142,41 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         }
     }
 
-    private fun loadCachedLibrary(): List<AutoBook> {
+    private fun loadDownloadedBookMetadata(): List<AutoBook> {
         val prefs = flutterPrefs()
-        val rawBooks = prefs.getString("flutter.androidAutoBookCatalog", null)
-        if (!rawBooks.isNullOrBlank()) {
-            val books = JSONArray(rawBooks)
-            return (0 until books.length()).map { index -> AutoBook.fromJson(books.getJSONObject(index)) }
+        val booksById = linkedMapOf<String, AutoBook>()
+
+        // Each completed download stores its own metadata snapshot. This keeps
+        // Android Auto independent of the server and the Flutter catalog cache.
+        prefs.all
+            .filterKeys { it.startsWith("flutter.androidAutoBook_") }
+            .values
+            .mapNotNull { it as? String }
+            .forEach { rawBook ->
+                runCatching {
+                    AutoBook.fromJson(JSONObject(rawBook))
+                }.getOrNull()?.let { book -> booksById[book.id] = book }
+            }
+
+        // Keep compatibility with installs created before per-book metadata
+        // was written, while still filtering against local files below.
+        val rawCatalog = prefs.getString("flutter.androidAutoBookCatalog", null)
+        if (!rawCatalog.isNullOrBlank()) {
+            runCatching {
+                val books = JSONArray(rawCatalog)
+                (0 until books.length()).map { index -> AutoBook.fromJson(books.getJSONObject(index)) }
+            }.getOrDefault(emptyList()).forEach { book ->
+                booksById.putIfAbsent(book.id, book)
+            }
         }
-        return emptyList()
+        return booksById.values.toList()
     }
 
     private fun playBook(bookId: String) {
         worker.execute {
-            val book = lastLibrary.find { it.id == bookId } ?: loadCachedLibrary().firstOrNull { it.id == bookId } ?: return@execute
+            val book = lastLibrary.find { it.id == bookId }
+                ?: downloadedBooks().firstOrNull { it.id == bookId }
+                ?: return@execute
             currentBook = book
             mainHandler.post {
                 setMetadata(book)
@@ -174,10 +190,12 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         player?.release()
         setPlaybackState(PlaybackStateCompat.STATE_BUFFERING)
 
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(authHeaders())
         val nextPlayer = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(
+                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
+                    DefaultDataSource.Factory(this)
+                )
+            )
             .build()
         nextPlayer.setAudioAttributes(
             AudioAttributes.Builder()
@@ -294,7 +312,6 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
 
     private fun saveCurrentProgress(finished: Boolean) {
         val book = currentBook ?: return
-        if (book.isLocalDevice) return
         val positionSeconds = try {
             if (finished) (player?.duration ?: 0L) / 1000.0 else (player?.currentPosition ?: 0L) / 1000.0
         } catch (_: Exception) {
@@ -306,53 +323,14 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         } catch (_: Exception) {
             book.durationSeconds?.toDouble()
         }
-        worker.execute {
-            try {
-                val body = JSONObject()
-                    .put("bookId", book.id)
-                    .put("positionSeconds", positionSeconds)
-                if (durationSeconds != null) {
-                    body.put("durationSeconds", durationSeconds)
-                }
-                requestJson("/api/progress", "POST", body)
-            } catch (_: Exception) {
-                // Progress will be saved again on the next timer tick or playback action.
-            }
+        flutterPrefs().edit()
+            .putLong("androidAutoProgress_${book.id}", positionSeconds.toLong())
+            .apply()
+        if (durationSeconds != null && finished) {
+            flutterPrefs().edit()
+                .putLong("androidAutoProgress_${book.id}", durationSeconds.toLong())
+                .apply()
         }
-    }
-
-    private fun requestJson(path: String, method: String, body: JSONObject? = null): JSONObject {
-        val url = URL("${settings().serverUrl}$path")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = NETWORK_TIMEOUT_MS
-            readTimeout = NETWORK_TIMEOUT_MS
-            authHeaders().forEach { (key, value) -> setRequestProperty(key, value) }
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-                outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            }
-        }
-        val responseCode = connection.responseCode
-        val stream = if (responseCode >= 400) connection.errorStream else connection.inputStream
-        val text = BufferedReader(InputStreamReader(stream)).use { it.readText() }
-        if (responseCode >= 400) {
-            throw IllegalStateException("Story Stack request failed.")
-        }
-        return if (text.isBlank()) JSONObject() else JSONObject(text)
-    }
-
-    private fun settings(): AutoSettings {
-        val prefs = flutterPrefs()
-        return AutoSettings(
-            serverUrl = prefs.getString("flutter.serverUrl", DEFAULT_SERVER_URL)?.trimEnd('/') ?: DEFAULT_SERVER_URL,
-            cookie = prefs.getString("flutter.cookie", null)
-        )
-    }
-
-    private fun authHeaders(): Map<String, String> {
-        return settings().cookie?.let { mapOf("Cookie" to it) } ?: emptyMap()
     }
 
     private fun flutterPrefs(): SharedPreferences {
@@ -451,8 +429,6 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         }
     }
 
-    private data class AutoSettings(val serverUrl: String, val cookie: String?)
-
     private data class AutoBook(
         val id: String,
         val title: String,
@@ -504,15 +480,11 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
 
     companion object {
         private const val ROOT_ID = "story-stack-root"
-        private const val RECENT_ID = "story-stack-recent"
+        private const val BOOKS_ID = "story-stack-books"
         private const val SERIES_ID = "story-stack-series"
         private const val AUTHORS_ID = "story-stack-authors"
-        private const val DOWNLOADS_ID = "story-stack-downloads"
         private const val SERIES_PREFIX = "series"
         private const val AUTHOR_PREFIX = "author"
-        private const val DEFAULT_SERVER_URL = ""
-        private const val BROWSE_LIMIT = 100
-        private const val NETWORK_TIMEOUT_MS = 10000
         private const val PROGRESS_SYNC_MS = 5000L
         private const val SKIP_MS = 30000
         private const val SKIP_BACK_ACTION = "com.storystack.story_stack_mobile.auto.SKIP_BACK_30"
