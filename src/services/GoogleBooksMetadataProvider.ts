@@ -1,5 +1,5 @@
 import type { Book } from "../domain/types";
-import type { ExternalMetadataProvider, MetadataCandidate } from "./ExternalMetadataProvider";
+import { cleanMetadataDescription, type ExternalMetadataProvider, type MetadataCandidate } from "./ExternalMetadataProvider";
 
 const GOOGLE_BOOKS_URL = "https://www.googleapis.com/books/v1/volumes";
 
@@ -19,9 +19,7 @@ export class GoogleBooksMetadataProvider implements ExternalMetadataProvider {
   }
 
   private buildQuery(book: Book): string {
-    const title = `intitle:${quote(book.title)}`;
-    const author = isMissingAuthor(book.author) ? "" : ` inauthor:${quote(book.author)}`;
-    return `${title}${author}`;
+    return `intitle:${quote(book.title)}`;
   }
 
   private isLikelyMatch(book: Book, volume: GoogleVolumeInfo): boolean {
@@ -31,8 +29,13 @@ export class GoogleBooksMetadataProvider implements ExternalMetadataProvider {
     if (isMissingAuthor(book.author)) {
       return titleMatches;
     }
-    const author = normalize(book.author);
-    const authorMatches = volume.authors?.some((candidate) => normalize(candidate).includes(author) || author.includes(normalize(candidate)));
+    const authorTokens = normalize(book.author)
+      .split(" ")
+      .filter((token) => token.length >= 3 && !["and", "the"].includes(token));
+    const authorMatches = volume.authors?.some((candidate) => {
+      const candidateTokens = normalize(candidate).split(" ");
+      return authorTokens.some((token) => candidateTokens.includes(token));
+    });
     return titleMatches && Boolean(authorMatches);
   }
 
@@ -41,10 +44,11 @@ export class GoogleBooksMetadataProvider implements ExternalMetadataProvider {
       title: volume.title,
       subtitle: volume.subtitle,
       author: volume.authors?.join(", "),
-      description: volume.description,
+      description: cleanMetadataDescription(volume.description),
       genres: volume.categories ?? (volume.mainCategory ? [volume.mainCategory] : undefined),
       publicationYear: parseYear(volume.publishedDate),
-      coverUrl: bestCoverUrl(volume.imageLinks)
+      coverUrl: bestCoverUrl(volume.imageLinks),
+      provider: "Google Books"
     };
   }
 }

@@ -108,6 +108,26 @@ export interface MetadataEnrichmentResult {
   finishedAt: string;
 }
 
+export interface MetadataCandidate {
+  title?: string;
+  subtitle?: string;
+  author?: string;
+  narrator?: string;
+  description?: string;
+  genres?: string[];
+  publicationYear?: number;
+  coverUrl?: string;
+  sourceUrl?: string;
+  provider?: string;
+}
+
+export interface BookMetadataLookupResult {
+  matched: boolean;
+  provider?: string;
+  sourceUrl?: string;
+  candidate?: MetadataCandidate;
+}
+
 export interface SyncResult {
   scanned: number;
   imported: number;

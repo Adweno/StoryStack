@@ -6,7 +6,9 @@ export function BookCover({ book, compact = false }: { book: Book; compact?: boo
   const [failed, setFailed] = useState(false);
 
   if (book.coverPath && !failed) {
-    const coverUrl = `/media/books/${book.id}/cover`;
+    // The cover path changes when a rescan finds or replaces artwork. Include
+    // it in the URL so browsers do not keep showing a previously cached 404.
+    const coverUrl = `/media/books/${book.id}/cover?v=${encodeURIComponent(book.coverPath)}`;
 
     return (
       <span className="book-cover cover-art-frame">

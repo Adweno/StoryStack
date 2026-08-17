@@ -134,6 +134,39 @@ describe("LibraryService", () => {
     expect(repository.shelves).toHaveLength(1);
   });
 
+  it("deletes user shelves but protects Favorites", async () => {
+    const repository = new MemoryLibraryRepository();
+    const service = new LibraryService(repository);
+    const favorites = await service.createShelf("user_1", "Favorites");
+    const custom = await service.createShelf("user_1", "To Read");
+
+    await expect(service.deleteShelf("user_1", favorites.id)).rejects.toThrow("Favorites");
+    await service.deleteShelf("user_1", custom.id);
+
+    expect(repository.shelves).toEqual([favorites]);
+  });
+
+  it("protects playback-managed shelves from manual creation and editing", async () => {
+    const repository = new MemoryLibraryRepository();
+    const service = new LibraryService(repository);
+
+    await expect(service.createShelf("user_1", "Finished Books")).rejects.toThrow("managed automatically");
+    await expect(service.createShelf("user_1", "Books in Progress")).rejects.toThrow("managed automatically");
+
+    const managed = {
+      id: "system_shelf_finished_user_1",
+      userId: "user_1",
+      name: "Finished Books",
+      createdAt: "2026-07-30T00:00:00.000Z"
+    };
+    repository.shelves.push(managed);
+    repository.books.set(sampleBook.id, sampleBook);
+
+    await expect(service.deleteShelf("user_1", managed.id)).rejects.toThrow("managed automatically");
+    await expect(service.addBookToShelf("user_1", managed.id, sampleBook.id)).rejects.toThrow("managed automatically");
+    await expect(service.removeBookFromShelf("user_1", managed.id, sampleBook.id)).rejects.toThrow("managed automatically");
+  });
+
   it("marks progress as finished near the end of a book", async () => {
     const repository = new MemoryLibraryRepository();
     const service = new LibraryService(repository);

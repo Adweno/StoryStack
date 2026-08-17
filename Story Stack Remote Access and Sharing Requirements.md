@@ -184,9 +184,10 @@ Story Stack should build metadata from multiple sources in this order:
 
 1. Existing embedded media tags.
 2. Existing sidecar metadata files, if present.
-3. Audiobookshelf metadata, if configured.
-4. Online metadata lookup, such as Google Books or other providers.
-5. Manual admin edits in a future release.
+3. Online metadata lookup, such as Google Books or other providers.
+4. Manual admin edits in a future release.
+
+Audiobookshelf is optional and must not be a runtime dependency. If another audiobook manager writes metadata and cover files into the source folder, Story Stack may read those source files directly.
 
 Requirements:
 

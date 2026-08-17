@@ -44,6 +44,75 @@ void main() {
     expect(groups.first.books.map((book) => book.id), ['1', '2']);
   });
 
+  test('remote shelf list includes managed progress shelves', () async {
+    final shelves = await ensureDefaultShelf(
+      _TestShelfApi(),
+      const [],
+      userId: 'user-1',
+    );
+
+    expect(shelves.map((shelf) => shelf.name), [
+      'Favorites',
+      'Finished Books',
+      'Books in Progress',
+    ]);
+    expect(shelves[1].id, 'system_shelf_finished_user-1');
+    expect(shelves[2].id, 'system_shelf_in-progress_user-1');
+  });
+
+  test('managed shelves classify books from per-user progress', () {
+    const books = [
+      Book(
+        id: 'finished',
+        title: 'Finished',
+        author: 'Author',
+        genres: [],
+        addedAt: '2026-01-01',
+      ),
+      Book(
+        id: 'progress',
+        title: 'In Progress',
+        author: 'Author',
+        genres: [],
+        addedAt: '2026-01-02',
+      ),
+      Book(
+        id: 'unstarted',
+        title: 'Unstarted',
+        author: 'Author',
+        genres: [],
+        addedAt: '2026-01-03',
+      ),
+    ];
+    const progress = {
+      'finished': PlaybackProgress(
+        userId: 'u',
+        bookId: 'finished',
+        positionSeconds: 100,
+        durationSeconds: 100,
+        status: ProgressStatus.finished,
+      ),
+      'progress': PlaybackProgress(
+        userId: 'u',
+        bookId: 'progress',
+        positionSeconds: 25,
+        durationSeconds: 100,
+        status: ProgressStatus.inProgress,
+      ),
+    };
+
+    expect(
+      managedShelfBooksFor(books, progress, 'Finished Books')
+          .map((book) => book.id),
+      ['finished'],
+    );
+    expect(
+      managedShelfBooksFor(books, progress, 'Books in Progress')
+          .map((book) => book.id),
+      ['progress'],
+    );
+  });
+
   test('finished progress returns full cover progress', () {
     const book = Book(
       id: '1',
@@ -85,6 +154,26 @@ void main() {
 
     expect(summary?.percent, 25);
     expect(summary?.timeLeft, const Duration(seconds: 75));
+  });
+
+  test('auto rewind uses stepped pause intervals', () {
+    expect(audiobookAutoRewind(const Duration(seconds: 9)), Duration.zero);
+    expect(
+      audiobookAutoRewind(const Duration(seconds: 10)),
+      const Duration(seconds: 3),
+    );
+    expect(
+      audiobookAutoRewind(const Duration(minutes: 1)),
+      const Duration(seconds: 10),
+    );
+    expect(
+      audiobookAutoRewind(const Duration(minutes: 5)),
+      const Duration(seconds: 20),
+    );
+    expect(
+      audiobookAutoRewind(const Duration(minutes: 30)),
+      const Duration(seconds: 30),
+    );
   });
 
   test('finished progress summary returns complete with no time left', () {
@@ -148,4 +237,12 @@ void main() {
     expect(queued.single.id, bookmark.id);
     expect(queued.single.positionSeconds, 42);
   });
+}
+
+class _TestShelfApi extends StoryStackApi {
+  @override
+  Future<Shelf> createShelf(String name) async => Shelf(
+    id: 'shelf-$name',
+    name: name,
+  );
 }

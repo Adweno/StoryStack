@@ -137,8 +137,54 @@ describe("StoryStackDatabase", () => {
     const firstRead = await database.listShelves("user_admin");
     const secondRead = await database.listShelves("user_admin");
 
-    expect(firstRead.map((shelf) => shelf.name)).toEqual(["Favorites", "Next Up"]);
+    expect(firstRead.map((shelf) => shelf.name)).toEqual([
+      "Favorites",
+      "Finished Books",
+      "Books in Progress",
+      "Next Up"
+    ]);
     expect(secondRead.filter((shelf) => shelf.name === "Favorites")).toHaveLength(1);
+  });
+
+  it("derives managed shelf books from each user's playback status", async () => {
+    const databasePath = path.join(os.tmpdir(), `story-stack-db-${crypto.randomUUID()}.sqlite`);
+    const database = new StoryStackDatabase(databasePath);
+    const now = "2026-07-30T00:00:00.000Z";
+    for (const [id, title] of [["finished_book", "Finished"], ["progress_book", "In Progress"]]) {
+      database.upsertBook({
+        id,
+        sourcePath: `/books/${id}`,
+        title,
+        author: "A. Writer",
+        genres: [],
+        addedAt: now,
+        hidden: false
+      });
+      await database.addLibraryBook({ userId: "user_admin", bookId: id, addedAt: now });
+    }
+    await database.upsertProgress({
+      userId: "user_admin",
+      bookId: "finished_book",
+      positionSeconds: 600,
+      durationSeconds: 600,
+      status: "finished",
+      updatedAt: now
+    });
+    await database.upsertProgress({
+      userId: "user_admin",
+      bookId: "progress_book",
+      positionSeconds: 120,
+      durationSeconds: 600,
+      status: "in_progress",
+      updatedAt: now
+    });
+
+    const shelves = await database.listShelves("user_admin");
+    const finishedShelf = shelves.find((shelf) => shelf.name === "Finished Books");
+    const progressShelf = shelves.find((shelf) => shelf.name === "Books in Progress");
+
+    expect(finishedShelf && database.listShelfBookDetails("user_admin", finishedShelf.id).map((book) => book.title)).toEqual(["Finished"]);
+    expect(progressShelf && database.listShelfBookDetails("user_admin", progressShelf.id).map((book) => book.title)).toEqual(["In Progress"]);
   });
 
   it("rotates seeded account passwords when configured by environment", () => {

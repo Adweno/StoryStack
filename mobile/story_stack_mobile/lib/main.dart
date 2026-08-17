@@ -10,15 +10,43 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.storystack.story_stack_mobile.audio',
+    androidNotificationChannelName: 'Story Stack playback',
+    androidNotificationOngoing: true,
+    androidShowNotificationBadge: false,
+    androidStopForegroundOnPause: true,
+    fastForwardInterval: const Duration(seconds: 30),
+    rewindInterval: const Duration(seconds: 30),
+  );
   runApp(const StoryStackMobileApp());
 }
 
+MediaItem _mediaItemFor(Book book, {int? trackIndex}) => MediaItem(
+  id: trackIndex == null ? book.id : '${book.id}-$trackIndex',
+  album: book.series ?? 'Story Stack',
+  title: book.title,
+  artist: book.author,
+  duration: trackIndex == null || trackIndex >= book.audioTracks.length
+      ? (book.durationSeconds == null
+            ? null
+            : Duration(seconds: book.durationSeconds!))
+      : (book.audioTracks[trackIndex].durationSeconds == null
+            ? null
+            : Duration(seconds: book.audioTracks[trackIndex].durationSeconds!)),
+  extras: {'bookId': book.id, 'trackIndex': trackIndex},
+);
+
 const _defaultServerUrl = '';
 const _defaultShelfName = 'Favorites';
+const _finishedShelfName = 'Finished Books';
+const _inProgressShelfName = 'Books in Progress';
 const _guestLocalDeviceUserId = 'local-device';
 const _compactControlSize = 38.0;
 const _audioExtensions = {
@@ -47,6 +75,7 @@ const _metadataFileNames = {'metadata.json', 'book.json', 'desc.json'};
 Future<List<Shelf>> ensureDefaultShelf(
   StoryStackApi api,
   List<Shelf> shelves,
+  {String? userId}
 ) async {
   final hasDefaultShelf = shelves.any(
     (shelf) => shelf.name.toLowerCase() == _defaultShelfName.toLowerCase(),
@@ -54,14 +83,87 @@ Future<List<Shelf>> ensureDefaultShelf(
   final nextShelves = hasDefaultShelf
       ? [...shelves]
       : [...shelves, await api.createShelf(_defaultShelfName)];
+  if (userId != null) {
+    for (final entry in [
+      ('system_shelf_finished_$userId', _finishedShelfName),
+      ('system_shelf_in-progress_$userId', _inProgressShelfName),
+    ]) {
+      if (!nextShelves.any(
+        (shelf) => shelf.name.toLowerCase() == entry.$2.toLowerCase(),
+      )) {
+        nextShelves.add(
+          Shelf(
+            id: entry.$1,
+            name: entry.$2,
+          ),
+        );
+      }
+    }
+  }
   nextShelves.sort((left, right) {
-    final leftIsDefault =
-        left.name.toLowerCase() == _defaultShelfName.toLowerCase();
-    final rightIsDefault =
-        right.name.toLowerCase() == _defaultShelfName.toLowerCase();
-    if (leftIsDefault != rightIsDefault) return leftIsDefault ? -1 : 1;
-    return 0;
+    return _shelfRank(left) - _shelfRank(right);
   });
+  return nextShelves;
+}
+
+int _shelfRank(Shelf shelf) {
+  switch (shelf.name.toLowerCase()) {
+    case 'favorites':
+      return 0;
+    case 'finished books':
+      return 1;
+    case 'books in progress':
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+bool _isManagedShelf(Shelf? shelf) =>
+    shelf != null &&
+    (shelf.name.toLowerCase() == _finishedShelfName.toLowerCase() ||
+        shelf.name.toLowerCase() == _inProgressShelfName.toLowerCase());
+
+ProgressStatus? _managedShelfStatus(String shelfName) {
+  switch (shelfName.trim().toLowerCase()) {
+    case 'finished books':
+      return ProgressStatus.finished;
+    case 'books in progress':
+      return ProgressStatus.inProgress;
+    default:
+      return null;
+  }
+}
+
+List<Book> managedShelfBooksFor(
+  List<Book> books,
+  Map<String, PlaybackProgress> progressByBook,
+  String shelfName,
+) {
+  final status = _managedShelfStatus(shelfName);
+  if (status == null) return const [];
+  return books
+      .where((book) => progressByBook[book.id]?.status == status)
+      .toList();
+}
+
+Future<List<Shelf>> ensureLocalPermanentShelves(
+  LocalDeviceLibraryStore store,
+  List<Shelf> shelves,
+) async {
+  final nextShelves = [...shelves];
+  for (final name in [
+    _defaultShelfName,
+    _finishedShelfName,
+    _inProgressShelfName,
+  ]) {
+    if (!nextShelves.any(
+      (shelf) => shelf.name.toLowerCase() == name.toLowerCase(),
+    )) {
+      nextShelves.add(await store.createShelf(name));
+    }
+  }
+  nextShelves.sort((left, right) => _shelfRank(left) - _shelfRank(right));
   return nextShelves;
 }
 
@@ -694,6 +796,10 @@ class _StoryShellState extends State<StoryShell> {
   Duration pendingPlaybackPosition = Duration.zero;
   int activeTrackIndex = 0;
   int lastRenderedPositionSecond = -1;
+  bool _wasPlaying = false;
+  DateTime? _pausedAt;
+  Duration? _pausedPosition;
+  double preferredPlaybackRate = 1.0;
 
   List<Book> get visibleBooks => storeMode ? storeBooks : libraryBooks;
 
@@ -709,6 +815,7 @@ class _StoryShellState extends State<StoryShell> {
     unawaited(castManager.initialize());
     localDeviceLibrary = LocalDeviceLibraryStore(widget.user.id);
     mirroredSourceStore = widget.sourceStore;
+    unawaited(_restorePlaybackRate());
     downloads.init().then((_) {
       if (mounted) {
         setState(() => downloadedBookIds = downloads.bookIds);
@@ -734,6 +841,17 @@ class _StoryShellState extends State<StoryShell> {
       }
     });
     player.playerStateStream.listen((state) {
+      if (_wasPlaying && !state.playing &&
+          state.processingState != ProcessingState.completed) {
+        final book = playingBook;
+        if (book != null && !sampleMode && !castManager.isCasting) {
+          _pausedAt = DateTime.now();
+          _pausedPosition = _wholePosition(book, activeTrackIndex, position);
+        }
+      } else if (!_wasPlaying && state.playing) {
+        unawaited(_applyAutoRewindIfNeeded());
+      }
+      _wasPlaying = state.playing;
       if (state.processingState == ProcessingState.completed) {
         unawaited(_saveProgress(forceFinished: !sampleMode));
       }
@@ -760,6 +878,23 @@ class _StoryShellState extends State<StoryShell> {
     if (mounted) setState(callback);
   }
 
+  void _applyProgressState(PlaybackProgress progress) {
+    setStateSafe(() {
+      progressByBook[progress.bookId] = progress;
+      final nextCounts = {...shelfBookCounts};
+      for (final shelf in shelves) {
+        if (_managedShelfStatus(shelf.name) != null) {
+          nextCounts[shelf.id] = managedShelfBooksFor(
+            libraryBooks,
+            progressByBook,
+            shelf.name,
+          ).length;
+        }
+      }
+      shelfBookCounts = nextCounts;
+    });
+  }
+
   Future<void> _loadAll() async {
     setStateSafe(() {
       loading = true;
@@ -769,11 +904,18 @@ class _StoryShellState extends State<StoryShell> {
       // The remote library backfill uses the downloaded-book index. Wait for
       // it before loading the library so existing downloads are eligible for
       // cover caching on the first launch after an update.
-      await downloads.init();
-      await localDeviceLibrary.init();
-      final localSource = await localDeviceLibrary.loadSource();
-      final localScan = await localDeviceLibrary.loadScanState();
-      final sourceAddresses = await localDeviceLibrary.loadSourceAddresses();
+      await Future.wait([
+        downloads.init(),
+        localDeviceLibrary.init(),
+      ]);
+      final sourceState = await Future.wait([
+        localDeviceLibrary.loadSource(),
+        localDeviceLibrary.loadScanState(),
+        localDeviceLibrary.loadSourceAddresses(),
+      ]);
+      final localSource = sourceState[0] as LibrarySourceMode;
+      final localScan = sourceState[1] as LocalDeviceScanState;
+      final sourceAddresses = sourceState[2] as LibrarySourceAddresses;
       await _applyApiServerForSource(localSource, sourceAddresses);
       if (localSource == LibrarySourceMode.localDevice) {
         final allBooks = sortBooks(await localDeviceLibrary.loadBooks());
@@ -793,6 +935,14 @@ class _StoryShellState extends State<StoryShell> {
           localDevice: true,
         );
         await _publishAndroidAutoProgress(progress);
+        final localShelves = await ensureLocalPermanentShelves(
+          localDeviceLibrary,
+          await localDeviceLibrary.loadShelves(),
+        );
+        final localShelfCounts = await _loadLocalShelfBookCounts(
+          localShelves,
+          allBooks,
+        );
         setStateSafe(() {
           librarySourceMode = localSource;
           remoteAccessAddress = sourceAddresses.remoteAccessAddress;
@@ -805,16 +955,22 @@ class _StoryShellState extends State<StoryShell> {
             featuredStoreBook = _randomStoreBook(storeCatalog);
           }
           progressByBook = progress;
-          shelves = const [];
-          shelfBookCounts = const {};
+          shelves = localShelves;
+          shelfBookCounts = localShelfCounts;
           loading = false;
         });
         return;
       }
-      await syncQueue.flush(widget.api);
-      final library = await widget.api.library();
-      final store = await widget.api.store();
-      await _cacheBooksForAndroidAuto(library.books);
+      // Syncing offline mutations and preparing secondary indexes should not
+      // block the first useful paint. The catalog is enough to make the app
+      // interactive; the rest is hydrated after it is visible.
+      unawaited(syncQueue.flush(widget.api));
+      final catalogs = await Future.wait([
+        widget.api.library(),
+        widget.api.store(),
+      ]);
+      final library = catalogs[0] as LibraryResponse;
+      final store = catalogs[1] as List<Book>;
       unawaited(
         downloads.cacheMissingCovers(
           library.books,
@@ -822,21 +978,10 @@ class _StoryShellState extends State<StoryShell> {
           localNetworkAddress: sourceAddresses.localNetworkAddress,
         ),
       );
-      final userShelves = await ensureDefaultShelf(
-        widget.api,
-        await widget.api.shelves(),
-      );
-      final nextShelfBookCounts = await _loadShelfBookCounts(userShelves);
       final sortedStore = sortBooks(store);
       final remoteProgress = {
         for (final item in library.progress) item.bookId: item,
       };
-      final mergedProgress = await _consumeAndroidAutoProgress(
-        remoteProgress,
-        books: library.books,
-        localDevice: false,
-      );
-      await _publishAndroidAutoProgress(mergedProgress);
       setStateSafe(() {
         librarySourceMode = localSource;
         remoteAccessAddress = sourceAddresses.remoteAccessAddress;
@@ -848,16 +993,53 @@ class _StoryShellState extends State<StoryShell> {
             !sortedStore.any((book) => book.id == featuredStoreBook!.id)) {
           featuredStoreBook = _randomStoreBook(sortedStore);
         }
-        progressByBook = mergedProgress;
-        shelves = userShelves;
-        shelfBookCounts = nextShelfBookCounts;
+        progressByBook = remoteProgress;
         loading = false;
       });
+      unawaited(
+        _finishRemoteHydration(
+          library: library,
+          remoteProgress: remoteProgress,
+        ),
+      );
     } catch (exception) {
       setStateSafe(() {
         error = exception.toString().replaceFirst('Exception: ', '');
         loading = false;
       });
+    }
+  }
+
+  Future<void> _finishRemoteHydration({
+    required LibraryResponse library,
+    required Map<String, PlaybackProgress> remoteProgress,
+  }) async {
+    try {
+      await _cacheBooksForAndroidAuto(library.books);
+      final userShelves = await ensureDefaultShelf(
+        widget.api,
+        await widget.api.shelves(),
+        userId: widget.user.id,
+      );
+      final mergedProgress = await _consumeAndroidAutoProgress(
+        remoteProgress,
+        books: library.books,
+        localDevice: false,
+      );
+      await _publishAndroidAutoProgress(mergedProgress);
+      final nextShelfBookCounts = await _loadShelfBookCounts(
+        userShelves,
+        books: library.books,
+        progress: mergedProgress,
+      );
+      setStateSafe(() {
+        progressByBook = mergedProgress;
+        shelves = userShelves;
+        shelfBookCounts = nextShelfBookCounts;
+      });
+    } catch (_) {
+      // Secondary hydration must never make an already usable catalog feel
+      // broken. The next refresh can retry these non-critical operations.
     }
   }
 
@@ -919,14 +1101,54 @@ class _StoryShellState extends State<StoryShell> {
     }
   }
 
-  Future<Map<String, int>> _loadShelfBookCounts(List<Shelf> shelves) async {
+  Future<Map<String, int>> _loadShelfBookCounts(
+    List<Shelf> shelves, {
+    List<Book>? books,
+    Map<String, PlaybackProgress>? progress,
+  }) async {
+    final availableBooks = books ?? libraryBooks;
+    final availableProgress = progress ?? progressByBook;
     final entries = await Future.wait(
       shelves.map((shelf) async {
+        if (_managedShelfStatus(shelf.name) != null) {
+          return MapEntry(
+            shelf.id,
+            managedShelfBooksFor(
+              availableBooks,
+              availableProgress,
+              shelf.name,
+            ).length,
+          );
+        }
         final books = await widget.api.shelfBooks(shelf.id);
         return MapEntry(shelf.id, books.length);
       }),
     );
     return Map.fromEntries(entries);
+  }
+
+  Future<Map<String, int>> _loadLocalShelfBookCounts(
+    List<Shelf> shelves,
+    List<Book> books,
+  ) async {
+    final counts = <String, int>{};
+    for (final shelf in shelves) {
+      counts[shelf.id] = (await localDeviceLibrary.shelfBookIds(
+        shelf.id,
+      )).where((bookId) => books.any((book) => book.id == bookId)).length;
+    }
+    return counts;
+  }
+
+  Future<void> _refreshActiveShelf() async {
+    final shelf = activeShelf;
+    if (shelf == null) return;
+    final books = await _loadShelfBooks(shelf);
+    if (!mounted) return;
+    setState(() {
+      activeShelfBooks = sortBooks(books);
+      shelfBookCounts = {...shelfBookCounts, shelf.id: books.length};
+    });
   }
 
   Book? _randomStoreBook(List<Book> books) {
@@ -938,6 +1160,7 @@ class _StoryShellState extends State<StoryShell> {
     final enteringStore = !storeMode && toStore;
     setState(() {
       selectedBook = null;
+      nowPlayingOpen = false;
       activeShelf = null;
       activeShelfBooks = [];
       activeGroup = null;
@@ -960,7 +1183,7 @@ class _StoryShellState extends State<StoryShell> {
   }
 
   Future<void> _openShelf(Shelf shelf) async {
-    final books = await widget.api.shelfBooks(shelf.id);
+    final books = await _loadShelfBooks(shelf);
     setState(() {
       selectedBook = null;
       activeShelf = shelf;
@@ -969,6 +1192,19 @@ class _StoryShellState extends State<StoryShell> {
       section = AppSection.shelves;
     });
     pageController.jumpTo(0);
+  }
+
+  Future<List<Book>> _loadShelfBooks(Shelf shelf) async {
+    if (librarySourceMode == LibrarySourceMode.localDevice) {
+      return localDeviceLibrary.shelfBooks(
+        shelf.id,
+        await localDeviceLibrary.loadBooks(),
+      );
+    }
+    if (_managedShelfStatus(shelf.name) != null) {
+      return managedShelfBooksFor(libraryBooks, progressByBook, shelf.name);
+    }
+    return widget.api.shelfBooks(shelf.id);
   }
 
   Future<void> _selectBook(Book book) async {
@@ -1010,9 +1246,7 @@ class _StoryShellState extends State<StoryShell> {
   }
 
   Future<BookMetadataResult> _findBookMetadata(Book book) async {
-    final result = await widget.api.findBookMetadata(book.id);
-    _applyBookUpdate(result.book);
-    return result;
+    return widget.api.findBookMetadata(book.id);
   }
 
   Future<void> _play(Book book, {bool sample = false}) async {
@@ -1020,6 +1254,7 @@ class _StoryShellState extends State<StoryShell> {
       await castManager.stopCasting();
     }
     await _saveProgress();
+    _clearPauseTracking();
     final trackDurations = _trackDurations(book);
     final progress = progressByBook[book.id];
     final start = sample
@@ -1060,9 +1295,19 @@ class _StoryShellState extends State<StoryShell> {
       if (isLocalDeviceBook && book.audioTracks.length == 1) {
         final path = book.audioTracks.first.path;
         if (path.startsWith('content:')) {
-          await player.setAudioSource(AudioSource.uri(Uri.parse(path)));
+          await player.setAudioSource(
+            AudioSource.uri(
+              Uri.parse(path),
+              tag: _mediaItemFor(book, trackIndex: 0),
+            ),
+          );
         } else {
-          await player.setFilePath(path);
+          await player.setAudioSource(
+            AudioSource.uri(
+              Uri.file(path),
+              tag: _mediaItemFor(book, trackIndex: 0),
+            ),
+          );
         }
         if (start.inSeconds > 0) {
           await player.seek(start);
@@ -1075,6 +1320,10 @@ class _StoryShellState extends State<StoryShell> {
                   track.path.startsWith('content:')
                       ? Uri.parse(track.path)
                       : Uri.file(track.path),
+                  tag: _mediaItemFor(
+                    book,
+                    trackIndex: book.audioTracks.indexOf(track),
+                  ),
                 ),
               )
               .toList(),
@@ -1086,13 +1335,27 @@ class _StoryShellState extends State<StoryShell> {
           ),
         );
       } else if (!sample && localPaths != null && localPaths.length == 1) {
-        await player.setFilePath(localPaths.first);
+        await player.setAudioSource(
+          AudioSource.uri(
+            Uri.file(localPaths.first),
+            tag: _mediaItemFor(book, trackIndex: 0),
+          ),
+        );
         if (start.inSeconds > 0) {
           await player.seek(start);
         }
       } else if (!sample && localPaths != null && localPaths.length > 1) {
         await player.setAudioSources(
-          localPaths.map((path) => AudioSource.uri(Uri.file(path))).toList(),
+          localPaths
+              .asMap()
+              .entries
+              .map(
+                (entry) => AudioSource.uri(
+                  Uri.file(entry.value),
+                  tag: _mediaItemFor(book, trackIndex: entry.key),
+                ),
+              )
+              .toList(),
           initialIndex: initialIndex,
           initialPosition: _trackPositionForWhole(
             start,
@@ -1107,6 +1370,7 @@ class _StoryShellState extends State<StoryShell> {
             (index) => AudioSource.uri(
               Uri.parse(widget.api.audioTrackUrl(book.id, index)),
               headers: widget.api.authHeaders,
+              tag: _mediaItemFor(book, trackIndex: index),
             ),
           ),
           initialIndex: initialIndex,
@@ -1117,9 +1381,12 @@ class _StoryShellState extends State<StoryShell> {
           ),
         );
       } else {
-        await player.setUrl(
-          widget.api.audioUrl(book.id),
-          headers: widget.api.authHeaders,
+        await player.setAudioSource(
+          AudioSource.uri(
+            Uri.parse(widget.api.audioUrl(book.id)),
+            headers: widget.api.authHeaders,
+            tag: _mediaItemFor(book),
+          ),
         );
         if (start.inSeconds > 0) {
           await player.seek(start);
@@ -1128,6 +1395,9 @@ class _StoryShellState extends State<StoryShell> {
     } finally {
       setStateSafe(() => restoringPlaybackPosition = false);
     }
+    // Apply the per-user preference after the source is ready so every new
+    // book starts at the same rate, including the first book after launch.
+    await player.setSpeed(preferredPlaybackRate);
     await player.play();
     if (sample) {
       Timer(const Duration(seconds: 30), () {
@@ -1239,6 +1509,35 @@ class _StoryShellState extends State<StoryShell> {
     return 'Bookmark at ${formatTime(Duration(seconds: seconds))}';
   }
 
+  void _clearPauseTracking() {
+    _pausedAt = null;
+    _pausedPosition = null;
+  }
+
+  Future<void> _applyAutoRewindIfNeeded() async {
+    final book = playingBook;
+    final pausedAt = _pausedAt;
+    final pausedPosition = _pausedPosition;
+    if (book == null || pausedAt == null || pausedPosition == null ||
+        sampleMode || castManager.isCasting) {
+      return;
+    }
+
+    _clearPauseTracking();
+    final rewind = audiobookAutoRewind(DateTime.now().difference(pausedAt));
+    if (rewind <= Duration.zero) return;
+
+    final target = pausedPosition > rewind
+        ? pausedPosition - rewind
+        : Duration.zero;
+    await _seekWhole(book, target);
+  }
+
+  Future<void> _resumePlayback() async {
+    await _applyAutoRewindIfNeeded();
+    await player.play();
+  }
+
   Future<void> _togglePlayback() async {
     if (castManager.isCasting) {
       await castManager.togglePlayback();
@@ -1247,7 +1546,7 @@ class _StoryShellState extends State<StoryShell> {
     if (player.playing) {
       await player.pause();
     } else {
-      await player.play();
+      await _resumePlayback();
     }
   }
 
@@ -1266,7 +1565,7 @@ class _StoryShellState extends State<StoryShell> {
         context,
         book,
         _displayPosition(book),
-        playbackRate: player.speed,
+        playbackRate: preferredPlaybackRate,
       );
       await player.pause();
     } catch (exception) {
@@ -1279,11 +1578,29 @@ class _StoryShellState extends State<StoryShell> {
   }
 
   Future<void> _setPlaybackRate(double rate) async {
+    preferredPlaybackRate = rate;
+    setStateSafe(() {});
+    unawaited(_savePlaybackRate(rate));
     if (castManager.isCasting) {
       await castManager.setPlaybackRate(rate);
       return;
     }
     await player.setSpeed(rate);
+  }
+
+  String get _playbackRateKey => 'playbackRate_${widget.user.id}';
+
+  Future<void> _restorePlaybackRate() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble(_playbackRateKey);
+    if (saved == null || saved < 0.5 || saved > 2.0) return;
+    preferredPlaybackRate = saved;
+    setStateSafe(() {});
+  }
+
+  Future<void> _savePlaybackRate(double rate) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_playbackRateKey, rate);
   }
 
   Future<void> _saveProgress({bool forceFinished = false}) async {
@@ -1301,7 +1618,7 @@ class _StoryShellState extends State<StoryShell> {
           positionSeconds,
           actualDuration.toDouble(),
         );
-        setStateSafe(() => progressByBook[book.id] = progress);
+        _applyProgressState(progress);
         return;
       }
       final progress = await widget.api.saveProgress(
@@ -1311,7 +1628,7 @@ class _StoryShellState extends State<StoryShell> {
       );
       await syncQueue.discardProgress(book.id);
       await syncQueue.flush(widget.api);
-      setStateSafe(() => progressByBook[book.id] = progress);
+      _applyProgressState(progress);
     } catch (_) {
       final queuedProgress = PlaybackProgress(
         userId: widget.user.id,
@@ -1324,7 +1641,7 @@ class _StoryShellState extends State<StoryShell> {
             ? ProgressStatus.inProgress
             : ProgressStatus.notStarted,
       );
-      setStateSafe(() => progressByBook[book.id] = queuedProgress);
+      _applyProgressState(queuedProgress);
       await syncQueue.enqueueProgress(
         book.id,
         positionSeconds,
@@ -1348,7 +1665,8 @@ class _StoryShellState extends State<StoryShell> {
         durationSeconds,
         durationSeconds,
       );
-      setState(() => progressByBook[book.id] = progress);
+      _applyProgressState(progress);
+      await _refreshActiveShelf();
       return;
     }
     PlaybackProgress progress;
@@ -1374,7 +1692,8 @@ class _StoryShellState extends State<StoryShell> {
         status: ProgressStatus.finished,
       );
     }
-    setState(() => progressByBook[book.id] = progress);
+    _applyProgressState(progress);
+    await _refreshActiveShelf();
   }
 
   Future<void> _clearProgress(Book book) async {
@@ -1385,7 +1704,8 @@ class _StoryShellState extends State<StoryShell> {
         (book.durationSeconds ?? progressByBook[book.id]?.durationSeconds)
             ?.toDouble(),
       );
-      setState(() => progressByBook[book.id] = progress);
+      _applyProgressState(progress);
+      await _refreshActiveShelf();
       return;
     }
     final durationSeconds =
@@ -1406,7 +1726,8 @@ class _StoryShellState extends State<StoryShell> {
         status: ProgressStatus.notStarted,
       );
     }
-    setState(() => progressByBook[book.id] = progress);
+    _applyProgressState(progress);
+    await _refreshActiveShelf();
   }
 
   List<Duration> _trackDurations(Book book) => book.audioTracks
@@ -1443,6 +1764,7 @@ class _StoryShellState extends State<StoryShell> {
   }
 
   Future<void> _seekWhole(Book book, Duration wholePosition) async {
+    if (!player.playing) _clearPauseTracking();
     if (castManager.isCasting) {
       await castManager.seek(wholePosition);
       return;
@@ -1513,21 +1835,39 @@ class _StoryShellState extends State<StoryShell> {
   Future<void> _addToLibrary(Book book) async {
     if (book.isLocalDevice) {
       await localDeviceLibrary.addToLibrary(book.id);
-      await _loadAll();
-      return;
+    } else {
+      await widget.api.addToLibrary(book.id);
     }
-    await widget.api.addToLibrary(book.id);
-    await _loadAll();
+    final updatedBook = book.copyWith(inLibrary: true);
+    setStateSafe(() {
+      storeBooks = storeBooks
+          .map((item) => item.id == book.id ? updatedBook : item)
+          .toList();
+      if (!libraryBooks.any((item) => item.id == book.id)) {
+        libraryBooks = sortBooks([...libraryBooks, updatedBook]);
+      }
+      if (selectedBook?.id == book.id) selectedBook = updatedBook;
+      if (featuredStoreBook?.id == book.id) featuredStoreBook = updatedBook;
+    });
   }
 
   Future<void> _removeFromLibrary(Book book) async {
     if (book.isLocalDevice) {
       await localDeviceLibrary.removeFromLibrary(book.id);
-      await _loadAll();
-      return;
+    } else {
+      await widget.api.removeFromLibrary(book.id);
     }
-    await widget.api.removeFromLibrary(book.id);
-    await _loadAll();
+    setStateSafe(() {
+      libraryBooks = libraryBooks
+          .where((item) => item.id != book.id)
+          .toList();
+      storeBooks = storeBooks
+          .map((item) => item.id == book.id
+              ? item.copyWith(inLibrary: false)
+              : item)
+          .toList();
+      if (selectedBook?.id == book.id) selectedBook = null;
+    });
   }
 
   Future<void> _changeLibrarySource(LibrarySourceMode mode) async {
@@ -1593,9 +1933,12 @@ class _StoryShellState extends State<StoryShell> {
   }
 
   Future<void> _addBookToShelf(Book book) async {
-    if (shelves.isEmpty) {
+    final editableShelves = shelves
+        .where((shelf) => !_isManagedShelf(shelf))
+        .toList();
+    if (editableShelves.isEmpty) {
       await _createShelf();
-      if (shelves.isEmpty) return;
+      if (shelves.where((shelf) => !_isManagedShelf(shelf)).isEmpty) return;
     }
     if (!mounted) return;
     final shelf = await showModalBottomSheet<Shelf>(
@@ -1612,20 +1955,31 @@ class _StoryShellState extends State<StoryShell> {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
-            ...shelves.map(
-              (shelf) => ListTile(
-                leading: const Icon(Icons.label_outline),
-                title: Text(shelf.name),
-                onTap: () => Navigator.pop(context, shelf),
-              ),
-            ),
+            ...shelves
+                .where((shelf) => !_isManagedShelf(shelf))
+                .map(
+                  (shelf) => ListTile(
+                    leading: const Icon(Icons.label_outline),
+                    title: Text(shelf.name),
+                    onTap: () => Navigator.pop(context, shelf),
+                  ),
+                ),
           ],
         ),
       ),
     );
     if (shelf == null) return;
-    await widget.api.addBookToShelf(shelf.id, book.id);
-    final shelfBooks = await widget.api.shelfBooks(shelf.id);
+    List<Book> shelfBooks;
+    if (librarySourceMode == LibrarySourceMode.localDevice) {
+      await localDeviceLibrary.addBookToShelf(shelf.id, book.id);
+      shelfBooks = await localDeviceLibrary.shelfBooks(
+        shelf.id,
+        await localDeviceLibrary.loadBooks(),
+      );
+    } else {
+      await widget.api.addBookToShelf(shelf.id, book.id);
+      shelfBooks = await widget.api.shelfBooks(shelf.id);
+    }
     if (!mounted) return;
     setState(() {
       shelfBookCounts = {...shelfBookCounts, shelf.id: shelfBooks.length};
@@ -1638,8 +1992,17 @@ class _StoryShellState extends State<StoryShell> {
   Future<void> _removeBookFromShelf(Book book) async {
     final shelf = activeShelf;
     if (shelf == null) return;
-    await widget.api.removeBookFromShelf(shelf.id, book.id);
-    final shelfBooks = await widget.api.shelfBooks(shelf.id);
+    List<Book> shelfBooks;
+    if (librarySourceMode == LibrarySourceMode.localDevice) {
+      await localDeviceLibrary.removeBookFromShelf(shelf.id, book.id);
+      shelfBooks = await localDeviceLibrary.shelfBooks(
+        shelf.id,
+        await localDeviceLibrary.loadBooks(),
+      );
+    } else {
+      await widget.api.removeBookFromShelf(shelf.id, book.id);
+      shelfBooks = await widget.api.shelfBooks(shelf.id);
+    }
     if (!mounted) return;
     setState(() {
       activeShelfBooks = sortBooks(shelfBooks);
@@ -1764,7 +2127,7 @@ class _StoryShellState extends State<StoryShell> {
               onRate: (rate) => unawaited(_setPlaybackRate(rate)),
               speed: castManager.isCasting
                   ? castManager.playbackRate
-                  : player.speed,
+                  : preferredPlaybackRate,
               restoringPosition: restoringPlaybackPosition,
               bookmarks: playingBookmarks,
               onAddBookmark: _addBookmark,
@@ -1950,6 +2313,7 @@ class _StoryShellState extends State<StoryShell> {
         onAddToShelf: _addBookToShelf,
         onRemoveFromShelf: _removeBookFromShelf,
         onCreate: _createShelf,
+        onDelete: _deleteShelf,
       ),
       AppSection.downloads => DownloadsPage(
         books: libraryBooks
@@ -2010,7 +2374,46 @@ class _StoryShellState extends State<StoryShell> {
       ),
     );
     if (name == null || name.isEmpty) return;
-    await widget.api.createShelf(name);
+    if (librarySourceMode == LibrarySourceMode.localDevice) {
+      await localDeviceLibrary.createShelf(name);
+    } else {
+      await widget.api.createShelf(name);
+    }
+    await _loadAll();
+  }
+
+  Future<void> _deleteShelf(Shelf shelf) async {
+    if (shelf.name.toLowerCase() == _defaultShelfName.toLowerCase() ||
+        _isManagedShelf(shelf)) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete ${shelf.name}?'),
+        content: const Text('The books will stay in your library.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (librarySourceMode == LibrarySourceMode.localDevice) {
+      await localDeviceLibrary.deleteShelf(shelf.id);
+    } else {
+      await widget.api.deleteShelf(shelf.id);
+    }
+    if (activeShelf?.id == shelf.id) {
+      activeShelf = null;
+      activeShelfBooks = [];
+    }
     await _loadAll();
   }
 
@@ -2871,9 +3274,9 @@ class BookCard extends StatelessWidget {
                       const SizedBox(width: 3),
                       CompactIconButton(
                         icon: book.inLibrary ? Icons.check : Icons.add,
-                        tooltip: 'Add',
+                        tooltip: book.inLibrary ? 'Remove from library' : 'Add to library',
                         filled: true,
-                        onPressed: onAdd,
+                        onPressed: book.inLibrary ? onRemove : onAdd,
                       ),
                     ],
                     if (!storeMode) ...[
@@ -2973,7 +3376,15 @@ class CompactMenuButton extends StatelessWidget {
         padding: EdgeInsets.zero,
         iconSize: 18,
         tooltip: 'More',
-        onSelected: onSelected,
+        onSelected: (value) {
+          // Do not let a previously focused search field regain focus after
+          // the popup closes, which would reopen the mobile keyboard.
+          FocusManager.instance.primaryFocus?.unfocus();
+          onSelected(value);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            FocusManager.instance.primaryFocus?.unfocus();
+          });
+        },
         itemBuilder: (context) => [
           if (canAddToShelf)
             const PopupMenuItem(value: 'shelf', child: Text('Add to Shelf')),
@@ -3027,11 +3438,19 @@ class BookCover extends StatelessWidget {
         book.isLocalDevice && book.coverPath!.startsWith('content:')) {
       coverProvider = null;
     } else if (book.isLocalDevice) {
-      coverProvider = FileImage(File(book.coverPath!));
+      coverProvider = ResizeImage(
+        FileImage(File(book.coverPath!)),
+        width: 512,
+        height: 512,
+      );
     } else {
-      coverProvider = CachedNetworkImageProvider(
-        api.coverUrl(book.id),
-        headers: api.authHeaders,
+      coverProvider = ResizeImage(
+        CachedNetworkImageProvider(
+          api.coverUrl(book.id),
+          headers: api.authHeaders,
+        ),
+        width: 512,
+        height: 512,
       );
     }
     return AspectRatio(
@@ -3173,6 +3592,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
   bool findingMetadata = false;
   bool editingMetadata = false;
   String? metadataMessage;
+  String? metadataCoverUrl;
 
   @override
   void initState() {
@@ -3222,9 +3642,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
     if (clearMessage) {
       metadataMessage = null;
     }
+    metadataCoverUrl = null;
   }
 
   Future<void> _loadReviews() async {
+    if (widget.book.isLocalDevice) {
+      setState(() => loadingReviews = false);
+      return;
+    }
     try {
       final data = await widget.api.bookReviews(widget.book.id);
       setState(() {
@@ -3268,6 +3693,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
           .where((item) => item.isNotEmpty)
           .toList(),
       publicationYear: int.tryParse(publicationYearController.text.trim()),
+      coverUrl: metadataCoverUrl,
     );
   }
 
@@ -3306,12 +3732,27 @@ class _BookDetailPageState extends State<BookDetailPage> {
       final result = await widget.onFindMetadata();
       if (!mounted) return;
       setState(() {
-        metadataMessage = result.matched
-            ? 'Metadata found.'
-            : 'No matching metadata was found.';
-        editingMetadata = false;
+        if (!result.matched || result.candidate == null) {
+          metadataMessage = 'No matching metadata was found.';
+          return;
+        }
+        final candidate = result.candidate!;
+        titleController.text = candidate.title ?? titleController.text;
+        subtitleController.text = candidate.subtitle ?? subtitleController.text;
+        authorController.text = candidate.author ?? authorController.text;
+        narratorController.text = candidate.narrator ?? narratorController.text;
+        descriptionController.text =
+            candidate.description ?? descriptionController.text;
+        genresController.text =
+            candidate.genres?.join(', ') ?? genresController.text;
+        publicationYearController.text =
+            candidate.publicationYear?.toString() ??
+            publicationYearController.text;
+        metadataCoverUrl = candidate.coverUrl;
+        metadataMessage =
+            'Found on ${result.provider ?? 'an external catalog'}. Review the fields, then save.';
+        editingMetadata = true;
       });
-      widget.onBookUpdated(result.book);
     } catch (error) {
       if (!mounted) return;
       setState(
@@ -3342,12 +3783,25 @@ class _BookDetailPageState extends State<BookDetailPage> {
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: VisualDensity.compact,
     );
-    final compactTextButton = TextButton.styleFrom(
-      minimumSize: const Size(0, 34),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+    final actionButtonStyle = ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size(0, 42)),
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 12),
+      ),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: VisualDensity.compact,
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
+    final destructiveActionStyle = OutlinedButton.styleFrom(
       foregroundColor: Theme.of(context).colorScheme.error,
+      side: BorderSide(color: Theme.of(context).colorScheme.error),
+      minimumSize: const Size(42, 42),
+      padding: EdgeInsets.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 88),
@@ -3407,74 +3861,99 @@ class _BookDetailPageState extends State<BookDetailPage> {
               ],
             ),
           ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                style: compactFilledButton,
-                onPressed: widget.inStore ? widget.onSample : widget.onPlay,
-                icon: Icon(
-                  widget.inStore ? Icons.graphic_eq : Icons.play_arrow,
-                ),
-                label: Text(widget.inStore ? 'Sample' : 'Play'),
-              ),
-              if (widget.inStore && !widget.inLibrary)
-                OutlinedButton.icon(
-                  style: compactOutlinedButton,
-                  onPressed: widget.onAdd,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add'),
-                ),
-              if (!widget.inStore && widget.inLibrary)
-                OutlinedButton.icon(
-                  style: compactOutlinedButton,
-                  onPressed: widget.onAddToShelf,
-                  icon: const Icon(Icons.label_outline),
-                  label: const Text('Shelf'),
-                ),
-              if (!widget.inStore && widget.inLibrary)
-                TextButton.icon(
-                  style: compactTextButton,
-                  onPressed: widget.onRemove,
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Remove'),
-                ),
-            ],
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, _) {
+              final canManageLibrary = !widget.inStore && widget.inLibrary;
+              final canAdd = widget.inStore && !widget.inLibrary;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          style: actionButtonStyle,
+                          onPressed: widget.inStore
+                              ? widget.onSample
+                              : widget.onPlay,
+                          icon: Icon(
+                            widget.inStore
+                                ? Icons.graphic_eq
+                                : Icons.play_arrow,
+                          ),
+                          label: Text(widget.inStore ? 'Sample' : 'Play'),
+                        ),
+                      ),
+                      if (canAdd || canManageLibrary) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: actionButtonStyle,
+                            onPressed: canAdd
+                                ? widget.onAdd
+                                : widget.onAddToShelf,
+                            icon: Icon(
+                              canAdd ? Icons.add : Icons.label_outline,
+                            ),
+                            label: Text(canAdd ? 'Add' : 'Add to Shelf'),
+                          ),
+                        ),
+                      ],
+                      if (canManageLibrary) ...[
+                        const SizedBox(width: 8),
+                        IconButton.outlined(
+                          tooltip: 'Remove from Library',
+                          style: destructiveActionStyle,
+                          onPressed: widget.onRemove,
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if (widget.canEditMetadata) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: actionButtonStyle,
+                            onPressed: () {
+                              setState(() {
+                                editingMetadata = !editingMetadata;
+                                metadataMessage = null;
+                                if (editingMetadata) {
+                                  _syncMetadataDraft(clearMessage: false);
+                                }
+                              });
+                            },
+                            icon: Icon(
+                              editingMetadata
+                                  ? Icons.close
+                                  : Icons.edit_outlined,
+                            ),
+                            label: Text(
+                              editingMetadata ? 'Cancel Edit' : 'Edit Metadata',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: actionButtonStyle,
+                            onPressed: findingMetadata ? null : _findMetadata,
+                            icon: const Icon(Icons.auto_fix_high_outlined),
+                            label: const Text('Find Metadata'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              );
+            },
           ),
           if (widget.canEditMetadata) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  style: compactOutlinedButton,
-                  onPressed: () {
-                    setState(() {
-                      editingMetadata = !editingMetadata;
-                      metadataMessage = null;
-                      if (editingMetadata) {
-                        _syncMetadataDraft(clearMessage: false);
-                      }
-                    });
-                  },
-                  icon: Icon(
-                    editingMetadata ? Icons.close : Icons.edit_outlined,
-                  ),
-                  label: Text(
-                    editingMetadata ? 'Cancel Edit' : 'Edit Metadata',
-                  ),
-                ),
-                OutlinedButton.icon(
-                  style: compactOutlinedButton,
-                  onPressed: findingMetadata ? null : _findMetadata,
-                  icon: const Icon(Icons.auto_fix_high_outlined),
-                  label: const Text('Find Metadata'),
-                ),
-              ],
-            ),
             if (metadataMessage != null) ...[
               const SizedBox(height: 8),
               Text(metadataMessage!),
@@ -3652,7 +4131,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
                 'No description available.',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
-          if (widget.user.reviewsEnabled) ...[
+          if (widget.user.reviewsEnabled && !book.isLocalDevice) ...[
             const SizedBox(height: 22),
             ReviewsPanel(
               reviews: reviews,
@@ -4117,6 +4596,7 @@ class ShelvesPage extends StatelessWidget {
     required this.onAddToShelf,
     required this.onRemoveFromShelf,
     required this.onCreate,
+    required this.onDelete,
   });
   final Shelf? activeShelf;
   final List<Book> activeShelfBooks;
@@ -4138,6 +4618,7 @@ class ShelvesPage extends StatelessWidget {
   final ValueChanged<Book> onAddToShelf;
   final ValueChanged<Book> onRemoveFromShelf;
   final VoidCallback onCreate;
+  final ValueChanged<Shelf> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -4152,7 +4633,9 @@ class ShelvesPage extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(shelf.name, style: Theme.of(context).textTheme.headlineMedium),
-          Text('${activeShelfBooks.length} books'),
+          Text(
+            '${activeShelfBooks.length} book${activeShelfBooks.length == 1 ? '' : 's'}',
+          ),
           const SizedBox(height: 18),
           BooksGrid(
             books: activeShelfBooks,
@@ -4169,7 +4652,9 @@ class ShelvesPage extends StatelessWidget {
             onMarkFinished: onMarkFinished,
             onClearProgress: onClearProgress,
             onAddToShelf: onAddToShelf,
-            onRemoveFromShelf: onRemoveFromShelf,
+            onRemoveFromShelf: _isManagedShelf(shelf)
+                ? null
+                : onRemoveFromShelf,
           ),
         ],
       );
@@ -4185,18 +4670,58 @@ class ShelvesPage extends StatelessWidget {
         const SizedBox(height: 12),
         if (shelves.isEmpty)
           const EmptyState(message: 'Create shelves to organize your library.'),
-        ...shelves.map(
-          (shelf) => Card(
+        ...shelves.map((shelf) {
+          final colorScheme = Theme.of(context).colorScheme;
+          final shelfName = shelf.name.toLowerCase();
+          final isFavorites = shelfName == _defaultShelfName.toLowerCase();
+          final isFinished = shelfName == _finishedShelfName.toLowerCase();
+          final isInProgress =
+              shelfName == _inProgressShelfName.toLowerCase();
+          final accent = isFavorites
+              ? colorScheme.primary
+              : isFinished
+              ? Colors.green
+              : isInProgress
+              ? colorScheme.tertiary
+              : colorScheme.outline;
+          final cardColor = (isFavorites || isFinished || isInProgress)
+              ? Color.alphaBlend(accent.withAlpha(28), colorScheme.surface)
+              : null;
+
+          return Card(
+            color: cardColor,
+            shape: (isFavorites || isFinished || isInProgress)
+                ? RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: accent.withAlpha(150)),
+                  )
+                : null,
             child: ListTile(
               title: Text(shelf.name),
               subtitle: Text(
                 '${shelfBookCounts[shelf.id] ?? 0} book${(shelfBookCounts[shelf.id] ?? 0) == 1 ? '' : 's'}',
               ),
-              leading: const Icon(Icons.label_outline),
+              leading: Icon(
+                isFavorites
+                    ? Icons.star_outline
+                    : isFinished
+                    ? Icons.check_circle_outline
+                    : isInProgress
+                    ? Icons.schedule_outlined
+                    : Icons.label_outline,
+                color: accent,
+              ),
+              trailing: isFavorites || isFinished || isInProgress
+                  ? null
+                  : IconButton(
+                      tooltip: 'Delete shelf',
+                      onPressed: () => onDelete(shelf),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
               onTap: () => onOpen(shelf),
             ),
-          ),
-        ),
+          );
+        }),
       ],
     );
   }
@@ -5923,6 +6448,12 @@ class StoryStackApi {
     return Shelf.fromJson(data['shelf']);
   }
 
+  Future<void> deleteShelf(String shelfId) => _request(
+    '/api/shelves/${Uri.encodeComponent(shelfId)}',
+    method: 'DELETE',
+    allowEmpty: true,
+  );
+
   Future<List<Book>> shelfBooks(String shelfId) async {
     final data = await _request(
       '/api/shelves/${Uri.encodeComponent(shelfId)}/books',
@@ -6075,9 +6606,7 @@ class StoryStackApi {
       '/api/books/${Uri.encodeComponent(bookId)}/metadata/find',
       method: 'POST',
     );
-    return BookMetadataResult.fromJson(
-      data['result'] as Map<String, dynamic>,
-    ).copyWithBook(Book.fromJson(data['book'] as Map<String, dynamic>));
+    return BookMetadataResult.fromJson(data);
   }
 
   Future<User> resetUserPassword(String userId, String newPassword) async {
@@ -6541,15 +7070,6 @@ extension _FirstOrNull<T> on Iterable<T> {
   }
 }
 
-extension on BookMetadataResult {
-  BookMetadataResult copyWithBook(Book book) => BookMetadataResult(
-    matched: matched,
-    coversAdded: coversAdded,
-    detailsAdded: detailsAdded,
-    book: book,
-  );
-}
-
 class LocalDeviceLibraryStore {
   LocalDeviceLibraryStore(this.userId);
 
@@ -6572,6 +7092,8 @@ class LocalDeviceLibraryStore {
   String get _libraryBookIdsKey => 'localDeviceLibraryBookIds_$userId';
   String get _progressKey => 'localDeviceProgress_$userId';
   String get _bookmarksKey => 'localDeviceBookmarks_$userId';
+  String get _shelvesKey => 'localDeviceShelves_$userId';
+  String get _shelfBooksKey => 'localDeviceShelfBooks_$userId';
 
   Future<void> init() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -6665,6 +7187,132 @@ class LocalDeviceLibraryStore {
     final ids = await loadLibraryBookIds();
     ids.remove(bookId);
     await _prefs!.setStringList(_libraryBookIdsKey, ids.toList());
+  }
+
+  Future<List<Shelf>> loadShelves() async {
+    await init();
+    final raw = _prefs!.getString(_shelvesKey);
+    if (raw == null || raw.isEmpty) return const [];
+    final data = jsonDecode(raw) as List;
+    return data
+        .whereType<Map>()
+        .map((item) => Shelf.fromJson(Map<String, dynamic>.from(item)))
+        .toList();
+  }
+
+  Future<void> _saveShelves(List<Shelf> shelves) async {
+    await _prefs!.setString(
+      _shelvesKey,
+      jsonEncode(
+        shelves.map((shelf) => {'id': shelf.id, 'name': shelf.name}).toList(),
+      ),
+    );
+  }
+
+  Future<Shelf> createShelf(String name) async {
+    await init();
+    final shelf = Shelf(
+      id: 'local_shelf_${DateTime.now().microsecondsSinceEpoch}',
+      name: name,
+    );
+    final shelves = await loadShelves()
+      ..add(shelf);
+    await _saveShelves(shelves);
+    return shelf;
+  }
+
+  Future<void> deleteShelf(String shelfId) async {
+    await init();
+    final shelves = await loadShelves();
+    final shelf = shelves.firstWhere((item) => item.id == shelfId);
+    if (shelf.name.toLowerCase() == _defaultShelfName.toLowerCase() ||
+        shelf.name.toLowerCase() == _finishedShelfName.toLowerCase() ||
+        shelf.name.toLowerCase() == _inProgressShelfName.toLowerCase()) {
+      return;
+    }
+    await _saveShelves(shelves.where((item) => item.id != shelfId).toList());
+    final all = await _loadShelfBookMap();
+    all.remove(shelfId);
+    await _saveShelfBookMap(all);
+  }
+
+  Future<Map<String, List<String>>> _loadShelfBookMap() async {
+    final raw = _prefs!.getString(_shelfBooksKey);
+    if (raw == null || raw.isEmpty) return {};
+    final data = jsonDecode(raw) as Map<String, dynamic>;
+    return data.map(
+      (key, value) =>
+          MapEntry(key, (value as List).map((item) => '$item').toList()),
+    );
+  }
+
+  Future<void> _saveShelfBookMap(Map<String, List<String>> shelves) async {
+    await _prefs!.setString(_shelfBooksKey, jsonEncode(shelves));
+  }
+
+  Future<Set<String>> shelfBookIds(String shelfId) async {
+    await init();
+    final shelves = await loadShelves();
+    Shelf? shelf;
+    for (final item in shelves) {
+      if (item.id == shelfId) {
+        shelf = item;
+        break;
+      }
+    }
+    final shelfName = shelf?.name.toLowerCase();
+    if (shelfName == _finishedShelfName.toLowerCase() ||
+        shelfName == _inProgressShelfName.toLowerCase()) {
+      final progress = await loadProgress();
+      final status = shelfName == _finishedShelfName.toLowerCase()
+          ? ProgressStatus.finished
+          : ProgressStatus.inProgress;
+      return progress.entries
+          .where((entry) => entry.value.status == status)
+          .map((entry) => entry.key)
+          .toSet();
+    }
+    final all = await _loadShelfBookMap();
+    return (all[shelfId] ?? const []).toSet();
+  }
+
+  Future<void> addBookToShelf(String shelfId, String bookId) async {
+    await init();
+    final shelves = await loadShelves();
+    Shelf? shelf;
+    for (final item in shelves) {
+      if (item.id == shelfId) {
+        shelf = item;
+        break;
+      }
+    }
+    if (shelf != null && _isManagedShelf(shelf)) return;
+    final all = await _loadShelfBookMap();
+    final ids = (all[shelfId] ?? <String>[]).toSet()..add(bookId);
+    all[shelfId] = ids.toList();
+    await _saveShelfBookMap(all);
+  }
+
+  Future<void> removeBookFromShelf(String shelfId, String bookId) async {
+    await init();
+    final shelves = await loadShelves();
+    Shelf? shelf;
+    for (final item in shelves) {
+      if (item.id == shelfId) {
+        shelf = item;
+        break;
+      }
+    }
+    if (shelf != null && _isManagedShelf(shelf)) return;
+    final all = await _loadShelfBookMap();
+    final ids = (all[shelfId] ?? <String>[]).toSet()..remove(bookId);
+    all[shelfId] = ids.toList();
+    await _saveShelfBookMap(all);
+  }
+
+  Future<List<Book>> shelfBooks(String shelfId, List<Book> books) async {
+    final ids = await shelfBookIds(shelfId);
+    return books.where((book) => ids.contains(book.id)).toList();
   }
 
   Future<List<Book>> loadBooks() async {
@@ -7895,6 +8543,7 @@ class BookMetadataUpdate {
     this.description,
     this.genres = const [],
     this.publicationYear,
+    this.coverUrl,
   });
 
   final String? title;
@@ -7906,6 +8555,7 @@ class BookMetadataUpdate {
   final String? description;
   final List<String> genres;
   final int? publicationYear;
+  final String? coverUrl;
 
   Map<String, dynamic> toJson() => {
     if (title != null) 'title': title,
@@ -7917,6 +8567,7 @@ class BookMetadataUpdate {
     if (description != null) 'description': description,
     if (genres.isNotEmpty) 'genres': genres,
     if (publicationYear != null) 'publicationYear': publicationYear,
+    if (coverUrl != null) 'coverUrl': coverUrl,
   };
 }
 
@@ -7925,20 +8576,66 @@ class BookMetadataResult {
     required this.matched,
     required this.coversAdded,
     required this.detailsAdded,
-    required this.book,
+    this.book,
+    this.candidate,
+    this.provider,
   });
 
   final bool matched;
   final int coversAdded;
   final int detailsAdded;
-  final Book book;
+  final Book? book;
+  final MetadataCandidate? candidate;
+  final String? provider;
 
   factory BookMetadataResult.fromJson(Map<String, dynamic> json) =>
       BookMetadataResult(
         matched: json['matched'] == true,
         coversAdded: (json['coversAdded'] as num?)?.round() ?? 0,
         detailsAdded: (json['detailsAdded'] as num?)?.round() ?? 0,
-        book: Book.fromJson(json['book'] as Map<String, dynamic>),
+        book: json['book'] is Map
+            ? Book.fromJson(Map<String, dynamic>.from(json['book'] as Map))
+            : null,
+        candidate: json['candidate'] is Map
+            ? MetadataCandidate.fromJson(
+                Map<String, dynamic>.from(json['candidate'] as Map),
+              )
+            : null,
+        provider: json['provider'] as String?,
+      );
+}
+
+class MetadataCandidate {
+  const MetadataCandidate({
+    this.title,
+    this.subtitle,
+    this.author,
+    this.narrator,
+    this.description,
+    this.genres,
+    this.publicationYear,
+    this.coverUrl,
+  });
+
+  final String? title;
+  final String? subtitle;
+  final String? author;
+  final String? narrator;
+  final String? description;
+  final List<String>? genres;
+  final int? publicationYear;
+  final String? coverUrl;
+
+  factory MetadataCandidate.fromJson(Map<String, dynamic> json) =>
+      MetadataCandidate(
+        title: json['title'] as String?,
+        subtitle: json['subtitle'] as String?,
+        author: json['author'] as String?,
+        narrator: json['narrator'] as String?,
+        description: json['description'] as String?,
+        genres: (json['genres'] as List?)?.whereType<String>().toList(),
+        publicationYear: (json['publicationYear'] as num?)?.round(),
+        coverUrl: json['coverUrl'] as String?,
       );
 }
 
@@ -8275,4 +8972,21 @@ Duration _trackPositionForWhole(
       .fold<Duration>(Duration.zero, (sum, item) => sum + item);
   final position = wholePosition - offset;
   return position.isNegative ? Duration.zero : position;
+}
+
+/// Returns the amount to rewind after a pause, following the stepped behavior
+/// used by established audiobook players. Short pauses are left untouched so
+/// ordinary play/pause use does not move the listener unexpectedly.
+Duration audiobookAutoRewind(Duration pausedFor) {
+  if (pausedFor < const Duration(seconds: 10)) return Duration.zero;
+  if (pausedFor < const Duration(minutes: 1)) {
+    return const Duration(seconds: 3);
+  }
+  if (pausedFor < const Duration(minutes: 5)) {
+    return const Duration(seconds: 10);
+  }
+  if (pausedFor < const Duration(minutes: 30)) {
+    return const Duration(seconds: 20);
+  }
+  return const Duration(seconds: 30);
 }

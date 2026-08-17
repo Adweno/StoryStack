@@ -3,7 +3,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Book, MetadataEnrichmentOutcome, MetadataEnrichmentResult } from "../domain/types";
 import type { BookMetadataPatch, StoryStackDatabase } from "../storage/StoryStackDatabase";
-import type { ExternalMetadataProvider, MetadataCandidate } from "./ExternalMetadataProvider";
+import { cleanMetadataDescription, type ExternalMetadataProvider, type MetadataCandidate } from "./ExternalMetadataProvider";
+import { AudibleMetadataProvider } from "./AudibleMetadataProvider";
 import { GoogleBooksMetadataProvider } from "./GoogleBooksMetadataProvider";
 
 export class MetadataEnrichmentService {
@@ -49,7 +50,7 @@ export class MetadataEnrichmentService {
     if (!book) {
       throw new Error("Book was not found.");
     }
-    const candidate = await this.options.provider.find(book);
+    const candidate = await this.findCandidate(book);
     if (!candidate) {
       return { matched: false, coversAdded: 0, detailsAdded: 0, book };
     }
@@ -67,6 +68,42 @@ export class MetadataEnrichmentService {
     };
   }
 
+  async findBook(bookId: string): Promise<{ matched: boolean; provider?: string; sourceUrl?: string; candidate?: MetadataCandidate }> {
+    const book = await this.database.getBook(bookId);
+    if (!book) throw new Error("Book was not found.");
+    const candidate = await this.findCandidate(book);
+    return candidate
+      ? { matched: true, provider: candidate.provider, sourceUrl: candidate.sourceUrl, candidate }
+      : { matched: false };
+  }
+
+  async applyCandidate(bookId: string, candidate: MetadataCandidate): Promise<Book> {
+    const book = await this.database.getBook(bookId);
+    if (!book) throw new Error("Book was not found.");
+    const patch = await this.candidateToPatch(book, candidate);
+    this.database.updateBookMetadata(book.id, patch);
+    return (await this.database.getBook(book.id)) ?? book;
+  }
+
+  async applyMetadataPatch(bookId: string, patch: MetadataCandidate): Promise<Book> {
+    return this.applyCandidate(bookId, patch);
+  }
+
+  private async findCandidate(book: Book): Promise<MetadataCandidate | undefined> {
+    let lastError: unknown;
+    const providers = this.options.providers ?? (this.options.provider ? [this.options.provider] : []);
+    for (const provider of providers) {
+      try {
+        const candidate = await provider.find(book);
+        if (candidate) return { ...candidate, provider: candidate.provider ?? provider.constructor.name.replace("MetadataProvider", "") };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError && providers.length === 1) throw lastError;
+    return undefined;
+  }
+
   private needsMetadata(book: Book): boolean {
     return (
       !book.coverPath ||
@@ -80,26 +117,38 @@ export class MetadataEnrichmentService {
   }
 
   private async createPatch(book: Book, candidate: MetadataCandidate): Promise<BookMetadataPatch> {
+    const patch = await this.candidateToPatch(book, candidate, true);
+    return patch;
+  }
+
+  private async candidateToPatch(book: Book, candidate: MetadataCandidate, onlyMissing = false): Promise<BookMetadataPatch> {
     const patch: BookMetadataPatch = {};
+    if (!onlyMissing || isBlank(book.title)) {
+      if (candidate.title) patch.title = candidate.title;
+    }
     if (!book.coverPath || !existsSync(book.coverPath)) {
       const coverPath = await this.saveCover(book, candidate.coverUrl);
       if (coverPath) {
         patch.coverPath = coverPath;
       }
     }
-    if (isBlank(book.subtitle) && candidate.subtitle) {
+    if ((!onlyMissing || isBlank(book.subtitle)) && candidate.subtitle) {
       patch.subtitle = candidate.subtitle;
     }
-    if (isMissingAuthor(book.author) && candidate.author) {
+    if ((!onlyMissing || isMissingAuthor(book.author)) && candidate.author) {
       patch.author = candidate.author;
     }
-    if (isBlank(book.description) && candidate.description) {
-      patch.description = candidate.description;
+    if ((!onlyMissing || isBlank(book.narrator)) && candidate.narrator) {
+      patch.narrator = candidate.narrator;
     }
-    if (book.genres.length === 0 && candidate.genres?.length) {
+    const description = cleanMetadataDescription(candidate.description);
+    if ((!onlyMissing || isBlank(book.description)) && description) {
+      patch.description = description;
+    }
+    if ((!onlyMissing || book.genres.length === 0) && candidate.genres?.length) {
       patch.genres = candidate.genres;
     }
-    if (!book.publicationYear && candidate.publicationYear) {
+    if ((!onlyMissing || !book.publicationYear) && candidate.publicationYear) {
       patch.publicationYear = candidate.publicationYear;
     }
     return patch;
@@ -129,8 +178,9 @@ export class MetadataEnrichmentService {
 
 export function createMetadataEnrichmentService(database: StoryStackDatabase, dataDir: string): MetadataEnrichmentService {
   const dynamicFetch: typeof fetch = (...args) => fetch(...args);
-  const provider = new GoogleBooksMetadataProvider(dynamicFetch);
-  return new MetadataEnrichmentService(database, { dataDir, fetcher: dynamicFetch, provider });
+  const audible = new AudibleMetadataProvider(dynamicFetch);
+  const google = new GoogleBooksMetadataProvider(dynamicFetch);
+  return new MetadataEnrichmentService(database, { dataDir, fetcher: dynamicFetch, providers: [audible, google] });
 }
 
 function isBlank(value?: string): boolean {
@@ -148,5 +198,6 @@ function safeFileName(value: string): string {
 interface MetadataEnrichmentOptions {
   dataDir: string;
   fetcher: typeof fetch;
-  provider: ExternalMetadataProvider;
+  providers?: ExternalMetadataProvider[];
+  provider?: ExternalMetadataProvider;
 }

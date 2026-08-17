@@ -2,6 +2,9 @@ import type { Book, PlaybackProgress, Shelf, ShelfBook, UserLibraryBook } from "
 import { Clock } from "../domain/Clock";
 import { IdFactory } from "../domain/IdFactory";
 
+const DEFAULT_SHELF_NAME = "Favorites";
+const MANAGED_SHELF_NAMES = new Set(["finished books", "books in progress"]);
+
 export interface LibraryRepository {
   getBook(bookId: string): Promise<Book | undefined>;
   listLibraryBooks(userId: string): Promise<UserLibraryBook[]>;
@@ -49,6 +52,9 @@ export class LibraryService {
     if (!cleanName) {
       throw new Error("Shelf name is required.");
     }
+    if (MANAGED_SHELF_NAMES.has(cleanName.toLowerCase())) {
+      throw new Error("This shelf is managed automatically.");
+    }
 
     const existingShelf = (await this.repository.listShelves(userId)).find(
       (shelf) => shelf.name.toLowerCase() === cleanName.toLowerCase()
@@ -67,6 +73,20 @@ export class LibraryService {
     return shelf;
   }
 
+  async deleteShelf(userId: string, shelfId: string): Promise<void> {
+    const shelf = (await this.repository.listShelves(userId)).find((item) => item.id === shelfId);
+    if (!shelf) {
+      throw new Error("Shelf does not belong to this user.");
+    }
+    if (shelf.name.trim().toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase()) {
+      throw new Error("The Favorites shelf cannot be deleted.");
+    }
+    if (MANAGED_SHELF_NAMES.has(shelf.name.trim().toLowerCase())) {
+      throw new Error("This shelf is managed automatically and cannot be deleted.");
+    }
+    await this.repository.deleteShelf(userId, shelfId);
+  }
+
   async addBookToShelf(userId: string, shelfId: string, bookId: string): Promise<ShelfBook> {
     const libraryBooks = await this.repository.listLibraryBooks(userId);
     if (!libraryBooks.some((entry) => entry.bookId === bookId)) {
@@ -74,8 +94,12 @@ export class LibraryService {
     }
 
     const shelves = await this.repository.listShelves(userId);
-    if (!shelves.some((shelf) => shelf.id === shelfId)) {
+    const shelf = shelves.find((item) => item.id === shelfId);
+    if (!shelf) {
       throw new Error("Shelf does not belong to this user.");
+    }
+    if (MANAGED_SHELF_NAMES.has(shelf.name.trim().toLowerCase())) {
+      throw new Error("This shelf is managed automatically.");
     }
 
     const shelfBooks = await this.repository.listShelfBooks(shelfId);
@@ -91,8 +115,12 @@ export class LibraryService {
 
   async removeBookFromShelf(userId: string, shelfId: string, bookId: string): Promise<void> {
     const shelves = await this.repository.listShelves(userId);
-    if (!shelves.some((shelf) => shelf.id === shelfId)) {
+    const shelf = shelves.find((item) => item.id === shelfId);
+    if (!shelf) {
       throw new Error("Shelf does not belong to this user.");
+    }
+    if (MANAGED_SHELF_NAMES.has(shelf.name.trim().toLowerCase())) {
+      throw new Error("This shelf is managed automatically.");
     }
     await this.repository.removeBookFromShelf(shelfId, bookId);
   }

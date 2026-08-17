@@ -2,30 +2,45 @@ import type { Book } from "../types";
 
 const CACHE_NAME = "story-stack-offline-books-v1";
 const BOOK_METADATA_KEY = "story-stack-offline-book-metadata-v1";
+const MAX_DOWNLOAD_ATTEMPTS = 3;
 
 export class OfflineBookCache {
+  private readonly activeDownloads = new Map<string, AbortController>();
+
   isSupported(): boolean {
     return typeof window !== "undefined" && typeof window.caches !== "undefined" && typeof URL.createObjectURL === "function";
   }
 
   async save(book: Book, options: OfflineBookSaveOptions = {}): Promise<void> {
     this.assertSupported();
+    const controller = new AbortController();
+    this.activeDownloads.set(book.id, controller);
     const cache = await caches.open(CACHE_NAME);
-    options.onProgress?.({ percent: 0, receivedBytes: 0 });
-    const audioUrls = this.audioUrls(book);
-    for (let index = 0; index < audioUrls.length; index += 1) {
-      await this.cacheUrl(cache, audioUrls[index], (progress) => {
-        options.onProgress?.({
-          ...progress,
-          percent: progress.percent === undefined ? undefined : Math.min(99, Math.round(((index + progress.percent / 100) / audioUrls.length) * 100))
-        });
-      });
+    try {
+      options.onProgress?.({ percent: 0, receivedBytes: 0 });
+      const audioUrls = this.audioUrls(book);
+      for (let index = 0; index < audioUrls.length; index += 1) {
+        await this.cacheUrl(cache, audioUrls[index], (progress) => {
+          options.onProgress?.({
+            ...progress,
+            percent: progress.percent === undefined ? undefined : Math.min(99, Math.round(((index + progress.percent / 100) / audioUrls.length) * 100))
+          });
+        }, controller.signal);
+      }
+      if (book.coverPath) await this.cacheUrl(cache, this.coverUrl(book.id), undefined, controller.signal);
+      options.onProgress?.({ percent: 100 });
+      this.saveBookMetadata(book);
+    } catch (error) {
+      await Promise.all([...new Set([...this.audioUrls(book), this.coverUrl(book.id)])].map((url) => cache.delete(url)));
+      this.removeBookMetadata(book.id);
+      throw error;
+    } finally {
+      this.activeDownloads.delete(book.id);
     }
-    if (book.coverPath) {
-      await this.cacheUrl(cache, this.coverUrl(book.id));
-    }
-    options.onProgress?.({ percent: 100 });
-    this.saveBookMetadata(book);
+  }
+
+  cancel(bookId: string): void {
+    this.activeDownloads.get(bookId)?.abort();
   }
 
   async has(bookId: string): Promise<boolean> {
@@ -87,13 +102,23 @@ export class OfflineBookCache {
     return sources[0];
   }
 
-  private async cacheUrl(cache: Cache, url: string, onProgress?: (progress: DownloadProgress) => void): Promise<void> {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error("Download failed.");
+  private async cacheUrl(cache: Cache, url: string, onProgress?: (progress: DownloadProgress) => void, signal?: AbortSignal): Promise<void> {
+    for (let attempt = 0; attempt < MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+      try {
+        const response = await fetch(url, { signal });
+        if (!response.ok) {
+          throw new Error("Download failed.");
+        }
+        const trackingResponse = response.clone();
+        await Promise.all([cache.put(url, response), this.trackDownloadProgress(trackingResponse, onProgress)]);
+        return;
+      } catch (error) {
+        if (signal?.aborted || attempt === MAX_DOWNLOAD_ATTEMPTS - 1) {
+          throw error;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 250 * 2 ** attempt));
+      }
     }
-    const trackingResponse = response.clone();
-    await Promise.all([cache.put(url, response), this.trackDownloadProgress(trackingResponse, onProgress)]);
   }
 
   private async trackDownloadProgress(response: Response, onProgress?: (progress: DownloadProgress) => void): Promise<void> {

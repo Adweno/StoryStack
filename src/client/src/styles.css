@@ -2007,6 +2007,33 @@ h1 {
   color: var(--muted);
 }
 
+.player-reference-tabs {
+  display: flex;
+  gap: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.player-reference-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.55rem 0.7rem;
+}
+
+.player-reference-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.player-empty-reference {
+  color: var(--muted);
+  padding: 0.55rem 0;
+}
+
 .player-bookmark-list {
   display: grid;
   gap: 0.35rem;
@@ -2120,6 +2147,23 @@ h1 {
 
 .book-metadata-message {
   color: #d8cdbc;
+}
+
+.metadata-review-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #d8cdbc;
+  font-size: 13px;
+}
+
+.metadata-review-summary img {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #343d36;
 }
 
 .book-detail-description {

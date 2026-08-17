@@ -5,7 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
@@ -14,7 +14,7 @@ import java.io.InputStreamReader
 import java.text.Normalizer
 import java.util.Locale
 
-class MainActivity : FlutterActivity() {
+class MainActivity : AudioServiceActivity() {
     private val channelName = "story_stack/local_device"
     private val requestChooseFolder = 8104
     private var pendingResult: MethodChannel.Result? = null

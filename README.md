@@ -1,6 +1,6 @@
 # Story Stack
 
-Story Stack is a self-hosted audiobook Store and personal library app. It reads an existing audiobook folder in place, keeps its own database, and lets users add Store books to My Library and optional shelves.
+Story Stack is a self-hosted audiobook Store and personal library app. It reads an existing audiobook folder in place, keeps its own database, and lets users add Store books to My Library and optional shelves. It does not require Audiobookshelf or any other media server.
 
 ## Current MVP
 
@@ -217,7 +217,11 @@ The `cloudflared` container is opt-in so local installs do not start a tunnel un
 
 ## Read-Only Media Rule
 
-Story Stack scans audiobook folders and imports catalog information into its own database. It does not move, rename, delete, re-tag, or rewrite source files. Removing a book from My Library only removes that user's library entry.
+Story Stack scans audiobook folders and imports catalog information into its own database. It reads embedded/source-side metadata and cover files when available, including `metadata.json` files written by compatible audiobook managers. It does not move, rename, delete, re-tag, or rewrite source files. Removing a book from My Library only removes that user's library entry.
+
+### Audiobookshelf compatibility
+
+Audiobookshelf is optional. If it saves metadata and cover art beside the audiobook source files, Story Stack reads those files directly. Story Stack does not connect to Audiobookshelf, open its database, mount its configuration, or require its service to be installed. The included Docker deployment only mounts the configured audiobook source folder.
 
 ## Notes
 

@@ -27,7 +27,8 @@ const bookMetadataSchema = z.object({
   description: z.string().trim().max(5000).optional(),
   genres: z.array(z.string().trim().min(1)).max(20).optional(),
   publicationYear: z.number().int().min(0).max(3000).optional(),
-  coverPath: z.string().trim().max(1024).optional()
+  coverPath: z.string().trim().max(1024).optional(),
+  coverUrl: z.string().url().max(2048).optional()
 });
 const shelfSchema = z.object({ name: z.string().trim().min(1).max(80) });
 const shelfBookSchema = z.object({ bookId: z.string().min(1) });
@@ -226,7 +227,12 @@ export class AppServer {
       if (!book || book.hidden) {
         return response.status(404).json({ error: "Book was not found." });
       }
-      this.context.database.updateBookMetadata(request.params.bookId, parsed.data);
+      const { coverUrl, ...metadataPatch } = parsed.data;
+      if (coverUrl) {
+        await this.context.metadataEnrichmentService.applyMetadataPatch(request.params.bookId, { ...metadataPatch, coverUrl });
+      } else {
+        this.context.database.updateBookMetadata(request.params.bookId, metadataPatch);
+      }
       const updatedBook = await this.context.database.getBook(request.params.bookId);
       if (!updatedBook) {
         return response.status(404).json({ error: "Book was not found." });
@@ -242,9 +248,8 @@ export class AppServer {
         return response.status(404).json({ error: "Book was not found." });
       }
       try {
-        const result = await this.context.metadataEnrichmentService.enrichBook(request.params.bookId);
-        const updatedBook = await this.context.database.getBook(request.params.bookId);
-        response.json({ result, book: updatedBook ?? book });
+        const result = await this.context.metadataEnrichmentService.findBook(request.params.bookId);
+        response.json(result);
       } catch (error) {
         this.sendHandledError(response, error);
       }
@@ -387,6 +392,17 @@ export class AppServer {
       }
       const shelf = await this.context.libraryService.createShelf(user.id, parsed.data.name);
       response.status(201).json({ shelf });
+    });
+
+    this.app.delete("/api/shelves/:shelfId", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      try {
+        await this.context.libraryService.deleteShelf(user.id, request.params.shelfId);
+        response.status(204).send();
+      } catch (error) {
+        this.sendHandledError(response, error);
+      }
     });
 
     this.app.get("/api/shelves/:shelfId/books", (request, response) => {

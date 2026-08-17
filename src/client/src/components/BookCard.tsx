@@ -1,4 +1,4 @@
-import { Check, CheckCircle2, Download, MoreVertical, Play, Plus, RotateCcw, Trash2, Volume2 } from "lucide-react";
+import { Check, CheckCircle2, Download, MoreVertical, Play, Plus, RotateCcw, Trash2, Volume2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -16,6 +16,7 @@ export function BookCard({
   offlineProgress,
   offlineState = "idle",
   onOfflineRemove,
+  onOfflineCancel,
   onRemove,
   onRemoveFromShelf,
   onPlay,
@@ -34,6 +35,7 @@ export function BookCard({
   offlineProgress?: number;
   offlineState?: "idle" | "saving" | "saved";
   onOfflineRemove?: () => void;
+  onOfflineCancel?: () => void;
   onRemove?: () => void;
   onRemoveFromShelf?: () => void;
   onPlay: () => void;
@@ -86,6 +88,11 @@ export function BookCard({
 
   const removeOffline = () => {
     onOfflineRemove?.();
+    setMenuOpen(false);
+  };
+
+  const cancelOffline = () => {
+    onOfflineCancel?.();
     setMenuOpen(false);
   };
 
@@ -173,9 +180,9 @@ export function BookCard({
               {offlineState === "saved" ? <Check size={16} /> : offlineState === "saving" ? <DownloadProgressRing progress={downloadProgress} /> : <Download size={16} />}
             </button>
           )}
-          {!inLibrary && (
-            <button className="icon-button primary" onClick={onAdd} title="Add to Library">
-              <Plus size={16} />
+          {variant === "store" && (
+            <button className="icon-button primary" onClick={inLibrary ? onRemove : onAdd} title={inLibrary ? "Remove from Library" : "Add to Library"}>
+              {inLibrary ? <Check size={16} /> : <Plus size={16} />}
             </button>
           )}
           {variant === "library" && inLibrary && (
@@ -199,6 +206,7 @@ export function BookCard({
                     markFinished={variant === "library" ? markFinished : undefined}
                     moveToShelf={moveToShelf}
                     removeOffline={onOfflineRemove ? removeOffline : undefined}
+                    cancelOffline={onOfflineCancel ? cancelOffline : undefined}
                     position={menuPosition}
                     remove={onRemove ? remove : undefined}
                     removeFromShelf={onRemoveFromShelf ? removeFromShelf : undefined}
@@ -243,6 +251,7 @@ function BookMenuPanel({
   moveToShelf,
   position,
   removeOffline,
+  cancelOffline,
   remove,
   removeFromShelf,
   shelves
@@ -253,10 +262,14 @@ function BookMenuPanel({
   moveToShelf: (shelf: Shelf) => void;
   position: MenuPosition;
   removeOffline?: () => void;
+  cancelOffline?: () => void;
   remove?: () => void;
   removeFromShelf?: () => void;
   shelves: Shelf[];
 }) {
+  const editableShelves = shelves.filter(
+    (shelf) => !["finished books", "books in progress"].includes(shelf.name.trim().toLowerCase())
+  );
   return (
     <div
       className="book-menu-panel floating-book-menu"
@@ -285,6 +298,12 @@ function BookMenuPanel({
           Remove from Local Storage
         </button>
       )}
+      {cancelOffline && (
+        <button onClick={cancelOffline}>
+          <XCircle size={15} />
+          Cancel Download
+        </button>
+      )}
       {remove && (
         <button onClick={remove}>
           <Trash2 size={15} />
@@ -299,8 +318,8 @@ function BookMenuPanel({
       )}
       <div className="book-menu-section">
         <span>Move to shelf</span>
-        {shelves.length > 0 ? (
-          shelves.map((shelf) => (
+        {editableShelves.length > 0 ? (
+          editableShelves.map((shelf) => (
             <button key={shelf.id} onClick={() => moveToShelf(shelf)}>
               {shelf.name}
             </button>

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Book, BookBookmark } from "../types";
 import { ApiClient } from "../lib/ApiClient";
 import { OfflineBookCache, type CachedAudioSource } from "../lib/OfflineBookCache";
+import { OfflineSyncQueue } from "../lib/OfflineSyncQueue";
 import { BookCover } from "./BookCover";
 
 export interface PlaybackRequest {
@@ -15,11 +16,15 @@ export interface PlaybackRequest {
 export function PlayerBar({
   playback,
   api,
-  onProgressUpdate
+  onProgressUpdate,
+  syncQueue,
+  collapseSignal
 }: {
   playback?: PlaybackRequest;
   api: ApiClient;
   onProgressUpdate?: (bookId: string, positionSeconds: number, durationSeconds?: number) => void;
+  syncQueue: OfflineSyncQueue;
+  collapseSignal: string;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastSavedSecondRef = useRef<number>(-1);
@@ -34,6 +39,7 @@ export function PlayerBar({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [castAvailable, setCastAvailable] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookBookmark[]>([]);
+  const [referenceTab, setReferenceTab] = useState<"chapters" | "bookmarks">("chapters");
   const book = playback?.book;
   const sampleStartSeconds = 180;
   const sampleDurationSeconds = 30;
@@ -88,9 +94,7 @@ export function PlayerBar({
 
     lastSavedSecondRef.current = currentSecond;
     onProgressUpdate?.(book.id, positionSeconds, durationSeconds);
-    void api.saveProgress(book.id, positionSeconds, durationSeconds).catch(() => {
-      // The local progress bar still updates; the next save attempt can retry the server.
-    });
+    void api.saveProgress(book.id, positionSeconds, durationSeconds).catch(() => syncQueue.enqueueProgress(book.id, positionSeconds, durationSeconds));
   };
 
   useEffect(() => {
@@ -100,8 +104,13 @@ export function PlayerBar({
     setAudioSources([]);
     setActiveTrackIndex(0);
     setTrackDurations(book?.audioTracks?.map((track) => track.durationSeconds ?? 0) ?? []);
+    setReferenceTab("chapters");
     lastSavedSecondRef.current = -1;
   }, [playback?.requestId]);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [collapseSignal]);
 
   useEffect(() => {
     if (!book || playback?.mode !== "play") {
@@ -259,14 +268,19 @@ export function PlayerBar({
       const bookmark = await api.createBookBookmark(book.id, { positionSeconds: progressValue, title });
       setBookmarks((current) => [...current, bookmark].sort((left, right) => left.positionSeconds - right.positionSeconds));
     } catch {
-      // Bookmarks are optional; keep playback usable if the request fails.
+      syncQueue.enqueueBookmarkCreate(book.id, progressValue, title);
     }
   };
 
   const removeBookmark = async (bookmark: BookBookmark) => {
     if (!book) return;
-    await api.deleteBookBookmark(book.id, bookmark.id);
-    setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
+    try {
+      await api.deleteBookBookmark(book.id, bookmark.id);
+      setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
+    } catch {
+      syncQueue.enqueueBookmarkDelete(book.id, bookmark.id);
+      setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
+    }
   };
 
   if (!book) {
@@ -327,18 +341,32 @@ export function PlayerBar({
           {renderProgressStats()}
           {playback.mode === "play" && (
             <div className="player-reference-tools">
-              <div className="player-reference-actions">
-                <button className="command-button" onClick={() => void addBookmark()}><Bookmark size={16} /> Bookmark moment</button>
-                {book.chapters?.length ? <span><List size={15} /> {book.chapters.length} chapters</span> : null}
+              <div className="player-reference-tabs" role="tablist" aria-label="Chapters and bookmarks">
+                <button className={referenceTab === "chapters" ? "active" : ""} onClick={() => setReferenceTab("chapters")} role="tab" aria-selected={referenceTab === "chapters"}>
+                  <List size={15} /> Chapters ({book.chapters?.length ?? 0})
+                </button>
+                <button className={referenceTab === "bookmarks" ? "active" : ""} onClick={() => setReferenceTab("bookmarks")} role="tab" aria-selected={referenceTab === "bookmarks"}>
+                  <Bookmark size={15} /> Bookmarks ({bookmarks.length})
+                </button>
               </div>
-              {bookmarks.length > 0 && <div className="player-bookmark-list">
-                {bookmarks.map((bookmark) => (
-                  <div className="player-bookmark" key={bookmark.id}>
-                    <button className="link-button" onClick={() => seekTo(bookmark.positionSeconds)}>{bookmark.title} <small>{formatTime(bookmark.positionSeconds)}</small></button>
-                    <button className="icon-button" onClick={() => void removeBookmark(bookmark)} title="Remove bookmark"><Trash2 size={14} /></button>
-                  </div>
+              {referenceTab === "chapters" && book.chapters?.length ? <div className="player-bookmark-list">
+                {book.chapters.map((chapter, index) => (
+                  <button className="player-bookmark link-button" key={chapter.id} onClick={() => seekTo(chapter.startSeconds)}>
+                    <span>{index + 1}. {chapter.title}</span><small>{formatTime(chapter.startSeconds)}</small>
+                  </button>
                 ))}
-              </div>}
+              </div> : null}
+              {referenceTab === "bookmarks" && <>
+                <button className="command-button" onClick={() => void addBookmark()}><Bookmark size={16} /> Add bookmark</button>
+                {bookmarks.length > 0 ? <div className="player-bookmark-list">
+                  {bookmarks.map((bookmark) => (
+                    <div className="player-bookmark" key={bookmark.id}>
+                      <button className="link-button" onClick={() => seekTo(bookmark.positionSeconds)}>{bookmark.title} <small>{formatTime(bookmark.positionSeconds)}</small></button>
+                      <button className="icon-button" onClick={() => void removeBookmark(bookmark)} title="Remove bookmark"><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </div> : <span className="player-empty-reference">No bookmarks yet.</span>}
+              </>}
             </div>
           )}
           <div className="player-controls expanded-controls">

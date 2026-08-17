@@ -4,6 +4,7 @@ import type {
   BookBookmark,
   CatalogSettings,
   MetadataEnrichmentResult,
+  BookMetadataLookupResult,
   PlaybackProgress,
   RemoteAccessSettings,
   Shelf,
@@ -95,6 +96,7 @@ export class ApiClient {
       genres?: string[];
       publicationYear?: number;
       coverPath?: string;
+      coverUrl?: string;
     }
   ): Promise<Book> {
     const data = await this.request<{ book: Book }>(`/api/books/${encodeURIComponent(bookId)}/metadata`, {
@@ -105,8 +107,22 @@ export class ApiClient {
     return data.book;
   }
 
-  async findBookMetadata(bookId: string): Promise<{ matched: boolean; coversAdded: number; detailsAdded: number; book: Book }> {
-    return this.post(`/api/books/${encodeURIComponent(bookId)}/metadata/find`, {});
+  async findBookMetadata(bookId: string): Promise<BookMetadataLookupResult> {
+    const data = await this.post<unknown>(`/api/books/${encodeURIComponent(bookId)}/metadata/find`, {});
+    if (!data || typeof data !== "object") {
+      return { matched: false };
+    }
+    const result = data as Record<string, unknown>;
+    const candidate = result.candidate;
+    if (!candidate || typeof candidate !== "object") {
+      return { matched: false, provider: typeof result.provider === "string" ? result.provider : undefined };
+    }
+    return {
+      matched: result.matched === true,
+      provider: typeof result.provider === "string" ? result.provider : undefined,
+      sourceUrl: typeof result.sourceUrl === "string" ? result.sourceUrl : undefined,
+      candidate: candidate as BookMetadataLookupResult["candidate"]
+    };
   }
 
   async deleteMyBookReview(bookId: string): Promise<void> {
@@ -134,6 +150,10 @@ export class ApiClient {
   async createShelf(name: string): Promise<Shelf> {
     const data = await this.post<{ shelf: Shelf }>("/api/shelves", { name });
     return data.shelf;
+  }
+
+  async deleteShelf(shelfId: string): Promise<void> {
+    await this.request(`/api/shelves/${encodeURIComponent(shelfId)}`, { method: "DELETE" });
   }
 
   async addBookToShelf(shelfId: string, bookId: string): Promise<void> {

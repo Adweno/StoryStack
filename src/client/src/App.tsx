@@ -30,9 +30,12 @@ import { defaultBookSort, sortBooksForDisplay, type BookSortOptions } from "./li
 import { LibraryAddPlanner } from "./lib/LibraryAddPlanner";
 import { LibraryRemovePlanner } from "./lib/LibraryRemovePlanner";
 import { OfflineBookCache } from "./lib/OfflineBookCache";
+import { OfflineSyncQueue } from "./lib/OfflineSyncQueue";
 import storyStackLogo from "./assets/story-stack-logo.png";
 import type {
   Book,
+  BookMetadataLookupResult,
+  MetadataCandidate,
   MetadataEnrichmentResult,
   RemoteAccessSettings,
   Shelf,
@@ -54,23 +57,31 @@ type BeforeInstallPromptEvent = Event & {
 
 const LAST_USER_KEY = "story-stack-last-user-v1";
 const DEFAULT_SHELF_NAME = "Favorites";
+const MANAGED_SHELF_NAMES = new Set(["finished books", "books in progress"]);
+
+function isManagedShelf(shelf: Shelf): boolean {
+  return MANAGED_SHELF_NAMES.has(shelf.name.trim().toLowerCase());
+}
 
 async function ensureDefaultShelf(api: ApiClient, shelfList: Shelf[]): Promise<Shelf[]> {
   const existing = shelfList.find((shelf) => shelf.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase());
   const shelvesWithDefault = existing ? shelfList : [...shelfList, await api.createShelf(DEFAULT_SHELF_NAME)];
   return [...shelvesWithDefault].sort((left, right) => {
-    const leftIsDefault = left.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase();
-    const rightIsDefault = right.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase();
-    if (leftIsDefault !== rightIsDefault) {
-      return leftIsDefault ? -1 : 1;
-    }
-    return 0;
+    const rank = (shelf: Shelf) => {
+      const name = shelf.name.trim().toLowerCase();
+      if (name === DEFAULT_SHELF_NAME.toLowerCase()) return 0;
+      if (name === "finished books") return 1;
+      if (name === "books in progress") return 2;
+      return 3;
+    };
+    return rank(left) - rank(right);
   });
 }
 
 export function App() {
   const api = useMemo(() => new ApiClient(), []);
   const offlineCache = useMemo(() => new OfflineBookCache(), []);
+  const syncQueue = useMemo(() => new OfflineSyncQueue(), []);
   const [space, setSpace] = useState<Space>("library");
   const [view, setView] = useState<View>("home");
   const [user, setUser] = useState<User>();
@@ -167,6 +178,17 @@ export function App() {
   useEffect(() => {
     void refresh().finally(() => setAuthChecked(true));
   }, []);
+
+  useEffect(() => {
+    const flush = () => void syncQueue.flush(api);
+    window.addEventListener("online", flush);
+    window.addEventListener("visibilitychange", flush);
+    flush();
+    return () => {
+      window.removeEventListener("online", flush);
+      window.removeEventListener("visibilitychange", flush);
+    };
+  }, [api, syncQueue]);
 
   useEffect(() => {
     const beforeInstallPrompt = (event: Event) => {
@@ -276,7 +298,12 @@ export function App() {
         );
         setStoreBooks([]);
         setLibraryBooks([]);
-        setPlaybackProgressByBookId({});
+        setPlaybackProgressByBookId(indexProgressByBookId(syncQueue.progressSnapshot().map((progress) => ({
+          ...progress,
+          userId: readLastUser()?.id ?? "offline",
+          status: listeningStatusFor(progress.positionSeconds, progress.durationSeconds),
+          updatedAt: new Date().toISOString()
+        }))));
         setCachedOfflineBooks(cachedBooks);
         setShelves([]);
         setSelectedShelf(undefined);
@@ -374,6 +401,7 @@ export function App() {
       description?: string;
       genres?: string[];
       publicationYear?: number;
+      coverUrl?: string;
     }
   ) => {
     const updatedBook = await api.updateBookMetadata(book.id, input);
@@ -384,11 +412,7 @@ export function App() {
   };
 
   const findBookMetadata = async (book: Book) => {
-    const result = await api.findBookMetadata(book.id);
-    setSelectedBook(result.book);
-    await refresh();
-    setSelectedBook(result.book);
-    return result;
+    return api.findBookMetadata(book.id);
   };
 
   const addToLibrary = async (book: Book) => {
@@ -414,11 +438,13 @@ export function App() {
   };
 
   const moveToShelf = async (book: Book, shelf: Shelf) => {
+    if (isManagedShelf(shelf)) return;
     await api.addBookToShelf(shelf.id, book.id);
     await refresh();
   };
 
   const removeFromShelf = async (book: Book, shelf: Shelf) => {
+    if (isManagedShelf(shelf)) return;
     await api.removeBookFromShelf(shelf.id, book.id);
     if (selectedShelf?.id === shelf.id) {
       setSelectedShelfBooks((current) => current.filter((item) => item.id !== book.id));
@@ -497,17 +523,27 @@ export function App() {
 
   const markBookFinished = async (book: Book) => {
     const durationSeconds = playbackProgressByBookId[book.id]?.durationSeconds ?? book.durationSeconds ?? 1;
-    await api.saveProgress(book.id, durationSeconds, durationSeconds);
+    await saveProgress(book.id, durationSeconds, durationSeconds);
     updatePlaybackProgress(book.id, durationSeconds, durationSeconds);
+    void refresh();
   };
 
   const clearBookProgress = async (book: Book) => {
-    await api.saveProgress(book.id, 0);
+    await saveProgress(book.id, 0);
     setPlaybackProgressByBookId((current) => {
       const next = { ...current };
       delete next[book.id];
       return next;
     });
+    void refresh();
+  };
+
+  const saveProgress = async (bookId: string, positionSeconds: number, durationSeconds?: number) => {
+    try {
+      await api.saveProgress(bookId, positionSeconds, durationSeconds);
+    } catch {
+      syncQueue.enqueueProgress(bookId, positionSeconds, durationSeconds);
+    }
   };
 
   const saveOffline = async (book: Book) => {
@@ -522,7 +558,9 @@ export function App() {
       setCachedOfflineBooks(await offlineCache.listBooks());
       setOfflineBookIds((current) => new Set(current).add(book.id));
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Book could not be saved offline.");
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        window.alert(error instanceof Error ? error.message : "Book could not be saved offline.");
+      }
     } finally {
       setOfflineProgressByBookId((current) => {
         const next = { ...current };
@@ -535,6 +573,20 @@ export function App() {
         return next;
       });
     }
+  };
+
+  const cancelOffline = (book: Book) => {
+    offlineCache.cancel(book.id);
+    setOfflineProgressByBookId((current) => {
+      const next = { ...current };
+      delete next[book.id];
+      return next;
+    });
+    setSavingOfflineBookIds((current) => {
+      const next = new Set(current);
+      next.delete(book.id);
+      return next;
+    });
   };
 
   const removeOffline = async (book: Book) => {
@@ -561,6 +613,21 @@ export function App() {
     await api.createShelf(shelfName);
     setShelfName("");
     await refresh();
+  };
+
+  const deleteShelf = async (shelf: Shelf) => {
+    if (shelf.name.trim().toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase() || isManagedShelf(shelf)) {
+      return;
+    }
+    if (!window.confirm(`Delete the ${shelf.name} shelf? Its books will stay in your library.`)) {
+      return;
+    }
+    await api.deleteShelf(shelf.id);
+    if (selectedShelf?.id === shelf.id) {
+      setSelectedShelf(undefined);
+      setSelectedShelfBooks([]);
+    }
+    setShelves((current) => current.filter((item) => item.id !== shelf.id));
   };
 
   const runMetadataEnrichment = async () => {
@@ -1217,8 +1284,9 @@ export function App() {
                   setSelectedShelfBooks([]);
                 }}
                 onMoveToShelf={moveToShelf}
-                onRemoveFromShelf={removeFromShelf}
+                onRemoveFromShelf={selectedShelf && isManagedShelf(selectedShelf) ? undefined : removeFromShelf}
                 onOfflineSave={saveOffline}
+                onOfflineCancel={cancelOffline}
                 onClearProgress={clearBookProgress}
                 onMarkFinished={markBookFinished}
                 offlineProgressFor={offlineProgressFor}
@@ -1228,7 +1296,7 @@ export function App() {
                 onRemove={removeFromLibrary}
                 onSelect={(book) => selectBook(book, "library")}
                 shelf={selectedShelf}
-                shelves={shelves}
+                shelves={shelves.filter((shelf) => !isManagedShelf(shelf))}
               />
             ) : (
               <>
@@ -1238,7 +1306,14 @@ export function App() {
                 </form>
                 <div className="shelf-list">
                   {shelves.map((shelf) => (
-                    <ShelfRow key={shelf.id} shelf={shelf} books={libraryBooks} api={api} onOpen={() => void openShelf(shelf)} />
+                    <ShelfRow
+                      key={shelf.id}
+                      shelf={shelf}
+                      books={libraryBooks}
+                      api={api}
+                      onOpen={() => void openShelf(shelf)}
+                      onDelete={() => void deleteShelf(shelf)}
+                    />
                   ))}
                 </div>
               </>
@@ -1262,6 +1337,7 @@ export function App() {
             onAdd={addToLibrary}
             onMoveToShelf={moveToShelf}
             onOfflineSave={saveOffline}
+            onOfflineCancel={cancelOffline}
             onClearProgress={clearBookProgress}
             onMarkFinished={markBookFinished}
             offlineProgressFor={offlineProgressFor}
@@ -1314,6 +1390,7 @@ export function App() {
             onCategoryChange={setLibraryCategoryKey}
             onMoveToShelf={moveToShelf}
             onOfflineSave={saveOffline}
+            onOfflineCancel={cancelOffline}
             onClearProgress={clearBookProgress}
             onMarkFinished={markBookFinished}
             offlineProgressFor={offlineProgressFor}
@@ -1351,7 +1428,13 @@ export function App() {
         )}
       </section>
 
-      <PlayerBar playback={playback} api={api} onProgressUpdate={updatePlaybackProgress} />
+        <PlayerBar
+          playback={playback}
+          api={api}
+          syncQueue={syncQueue}
+          onProgressUpdate={updatePlaybackProgress}
+          collapseSignal={`${space}:${view}`}
+        />
     </main>
   );
 }
@@ -1385,7 +1468,7 @@ function BookDetailPage({
   onSaveReview: (rating: number, review: string) => Promise<void>;
   reviewMessage: string;
   canEditMetadata: boolean;
-  onFindMetadata: () => Promise<{ matched: boolean; coversAdded: number; detailsAdded: number; book: Book }>;
+  onFindMetadata: () => Promise<BookMetadataLookupResult>;
   onSaveMetadata: (
     input: {
       title?: string;
@@ -1397,6 +1480,7 @@ function BookDetailPage({
       description?: string;
       genres?: string[];
       publicationYear?: number;
+      coverUrl?: string;
     }
   ) => Promise<Book>;
   reviewsEnabled: boolean;
@@ -1410,6 +1494,7 @@ function BookDetailPage({
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [findingMetadata, setFindingMetadata] = useState(false);
   const [editingMetadata, setEditingMetadata] = useState(false);
+  const [metadataCandidate, setMetadataCandidate] = useState<MetadataCandidate | undefined>();
 
   useEffect(() => {
     setRating(undefined);
@@ -1417,6 +1502,7 @@ function BookDetailPage({
     setMetadataDraft(metadataDraftFromBook(book));
     setMetadataMessage("");
     setEditingMetadata(false);
+    setMetadataCandidate(undefined);
   }, [book.id]);
 
   const summary = reviews?.summary ?? { averageRating: 0, reviewCount: 0 };
@@ -1430,10 +1516,11 @@ function BookDetailPage({
     setSavingMetadata(true);
     setMetadataMessage("");
     try {
-      const updatedBook = await onSaveMetadata(metadataDraftToInput(metadataDraft));
+      const updatedBook = await onSaveMetadata({ ...metadataDraftToInput(metadataDraft), coverUrl: metadataCandidate?.coverUrl });
       setMetadataDraft(metadataDraftFromBook(updatedBook));
       setMetadataMessage("Metadata saved.");
       setEditingMetadata(false);
+      setMetadataCandidate(undefined);
     } catch (error) {
       setMetadataMessage(error instanceof Error ? error.message : "Metadata could not be saved.");
     } finally {
@@ -1446,9 +1533,14 @@ function BookDetailPage({
     setMetadataMessage("");
     try {
       const result = await onFindMetadata();
-      setMetadataDraft(metadataDraftFromBook(result.book));
-      setMetadataMessage(result.matched ? "Metadata found." : "No matching metadata was found.");
-      setEditingMetadata(false);
+      if (!result.matched || !result.candidate) {
+        setMetadataMessage("No matching metadata was found.");
+        return;
+      }
+      setMetadataCandidate(result.candidate);
+      setMetadataDraft(metadataDraftFromCandidate(book, result.candidate));
+      setMetadataMessage(`Found on ${result.provider ?? "an external catalog"}. Review the details, then save to apply them.`);
+      setEditingMetadata(true);
     } catch (error) {
       setMetadataMessage(error instanceof Error ? error.message : "Metadata lookup could not be completed.");
     } finally {
@@ -1543,6 +1635,7 @@ function BookDetailPage({
                   onClick={() => {
                     setEditingMetadata((current) => !current);
                     setMetadataMessage("");
+                    setMetadataCandidate(undefined);
                     setMetadataDraft(metadataDraftFromBook(book));
                   }}
                 >
@@ -1558,7 +1651,13 @@ function BookDetailPage({
               {editingMetadata && (
                 <section className="book-metadata-panel">
                   <div className="settings-section-heading compact">
-                    <h3>Edit Metadata</h3>
+                    <h3>{metadataCandidate ? "Review Found Metadata" : "Edit Metadata"}</h3>
+                    {metadataCandidate && (
+                      <div className="metadata-review-summary">
+                        {metadataCandidate.coverUrl && <img src={metadataCandidate.coverUrl} alt="Found cover preview" />}
+                        <p>Review the imported details before saving. Nothing changes until you choose Save Metadata.</p>
+                      </div>
+                    )}
                   </div>
                   <form className="book-metadata-form" onSubmit={saveMetadata}>
                     <div className="book-metadata-grid">
@@ -1641,6 +1740,7 @@ function BookDetailPage({
                         onClick={() => {
                           setEditingMetadata(false);
                           setMetadataMessage("");
+                          setMetadataCandidate(undefined);
                         }}
                       >
                         Cancel
@@ -1733,6 +1833,20 @@ function metadataDraftFromBook(book: Book): BookMetadataDraft {
     description: book.description ?? "",
     genres: book.genres.join(", "),
     publicationYear: book.publicationYear?.toString() ?? ""
+  };
+}
+
+function metadataDraftFromCandidate(book: Book, candidate: MetadataCandidate): BookMetadataDraft {
+  return {
+    title: candidate.title ?? book.title,
+    subtitle: candidate.subtitle ?? book.subtitle ?? "",
+    author: candidate.author ?? book.author,
+    narrator: candidate.narrator ?? book.narrator ?? "",
+    series: book.series ?? "",
+    seriesOrder: book.seriesOrder?.toString() ?? "",
+    description: candidate.description ?? book.description ?? "",
+    genres: (candidate.genres ?? book.genres).join(", "),
+    publicationYear: candidate.publicationYear?.toString() ?? book.publicationYear?.toString() ?? ""
   };
 }
 
@@ -1972,6 +2086,7 @@ function HomeDashboard({
   onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
+  onOfflineCancel,
   offlineProgressFor,
   offlineStateFor,
   onOpenStore,
@@ -1991,6 +2106,7 @@ function HomeDashboard({
   onMarkFinished: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
+  onOfflineCancel: (book: Book) => void;
   offlineProgressFor: (book: Book) => number | undefined;
   offlineStateFor: (book: Book) => OfflineState;
   onOpenStore: () => void;
@@ -2029,6 +2145,7 @@ function HomeDashboard({
           onMarkFinished={onMarkFinished}
           onMoveToShelf={onMoveToShelf}
           onOfflineSave={onOfflineSave}
+          onOfflineCancel={onOfflineCancel}
           offlineProgressFor={offlineProgressFor}
           offlineStateFor={offlineStateFor}
           onPlay={onPlay}
@@ -2202,6 +2319,7 @@ function DashboardRow({
   onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
+  onOfflineCancel,
   offlineProgressFor,
   offlineStateFor,
   onPlay,
@@ -2219,6 +2337,7 @@ function DashboardRow({
   onMarkFinished?: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave?: (book: Book) => Promise<void>;
+  onOfflineCancel?: (book: Book) => void;
   offlineProgressFor?: (book: Book) => number | undefined;
   offlineStateFor?: (book: Book) => OfflineState;
   onPlay: (book: Book) => void;
@@ -2245,6 +2364,7 @@ function DashboardRow({
             onMarkFinished={variant === "library" && onMarkFinished ? () => void onMarkFinished(book) : undefined}
             onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
             onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
+            onOfflineCancel={variant === "library" && onOfflineCancel ? () => onOfflineCancel(book) : undefined}
             offlineProgress={offlineProgressFor?.(book)}
             offlineState={offlineStateFor?.(book) ?? "idle"}
             onRemove={() => void onRemove(book)}
@@ -2303,6 +2423,7 @@ function BookCollectionBrowser({
   onMarkFinished,
   onMoveToShelf,
   onOfflineSave,
+  onOfflineCancel,
   offlineProgressFor,
   offlineStateFor,
   onPlay,
@@ -2328,6 +2449,7 @@ function BookCollectionBrowser({
   onMarkFinished?: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave?: (book: Book) => Promise<void>;
+  onOfflineCancel?: (book: Book) => void;
   offlineProgressFor?: (book: Book) => number | undefined;
   offlineStateFor?: (book: Book) => OfflineState;
   onPlay: (book: Book) => void;
@@ -2418,6 +2540,7 @@ function BookCollectionBrowser({
                 onMarkFinished={variant === "library" && onMarkFinished ? () => void onMarkFinished(book) : undefined}
                 onMoveToShelf={(shelf) => void onMoveToShelf(book, shelf)}
                 onOfflineSave={variant === "library" && onOfflineSave ? () => void onOfflineSave(book) : undefined}
+                onOfflineCancel={variant === "library" && onOfflineCancel ? () => onOfflineCancel(book) : undefined}
                 offlineProgress={offlineProgressFor?.(book)}
                 offlineState={offlineStateFor?.(book) ?? "idle"}
                 onRemove={() => void onRemove(book)}
@@ -2673,6 +2796,7 @@ function ShelfBookBrowser({
   onMoveToShelf,
   onRemoveFromShelf,
   onOfflineSave,
+  onOfflineCancel,
   offlineProgressFor,
   offlineStateFor,
   onPlay,
@@ -2689,8 +2813,9 @@ function ShelfBookBrowser({
   onClearProgress: (book: Book) => Promise<void>;
   onMarkFinished: (book: Book) => Promise<void>;
   onMoveToShelf: (book: Book, shelf: Shelf) => Promise<void>;
-  onRemoveFromShelf: (book: Book, shelf: Shelf) => Promise<void>;
+  onRemoveFromShelf?: (book: Book, shelf: Shelf) => Promise<void>;
   onOfflineSave: (book: Book) => Promise<void>;
+  onOfflineCancel: (book: Book) => void;
   offlineProgressFor: (book: Book) => number | undefined;
   offlineStateFor: (book: Book) => OfflineState;
   onPlay: (book: Book) => void;
@@ -2722,8 +2847,9 @@ function ShelfBookBrowser({
               onClearProgress={() => void onClearProgress(book)}
               onMarkFinished={() => void onMarkFinished(book)}
               onMoveToShelf={(targetShelf) => void onMoveToShelf(book, targetShelf)}
-              onRemoveFromShelf={() => void onRemoveFromShelf(book, shelf)}
+              onRemoveFromShelf={onRemoveFromShelf ? () => void onRemoveFromShelf(book, shelf) : undefined}
               onOfflineSave={() => void onOfflineSave(book)}
+              onOfflineCancel={() => onOfflineCancel(book)}
               offlineProgress={offlineProgressFor(book)}
               offlineState={offlineStateFor(book)}
               onRemove={() => void onRemove(book)}
@@ -2742,7 +2868,7 @@ function ShelfBookBrowser({
   );
 }
 
-function ShelfRow({ shelf, books, api, onOpen }: { shelf: Shelf; books: Book[]; api: ApiClient; onOpen: () => void }) {
+function ShelfRow({ shelf, books, api, onOpen, onDelete }: { shelf: Shelf; books: Book[]; api: ApiClient; onOpen: () => void; onDelete: () => void }) {
   const [bookId, setBookId] = useState("");
   const [count, setCount] = useState(0);
 
@@ -2766,7 +2892,7 @@ function ShelfRow({ shelf, books, api, onOpen }: { shelf: Shelf; books: Book[]; 
         <strong>{shelf.name}</strong>
         <span>{count} books</span>
       </button>
-      <form onSubmit={add}>
+      {!isManagedShelf(shelf) && <form onSubmit={add}>
         <select value={bookId} onChange={(event) => setBookId(event.target.value)}>
           <option value="">Add a library book</option>
           {books.map((book) => (
@@ -2776,7 +2902,12 @@ function ShelfRow({ shelf, books, api, onOpen }: { shelf: Shelf; books: Book[]; 
           ))}
         </select>
         <button className="command-button">Add</button>
-      </form>
+      </form>}
+      {shelf.name.trim().toLowerCase() !== DEFAULT_SHELF_NAME.toLowerCase() && !isManagedShelf(shelf) && (
+        <button className="icon-button shelf-delete-button" onClick={onDelete} title={`Delete ${shelf.name}`} type="button">
+          <Trash2 size={16} />
+        </button>
+      )}
     </article>
   );
 }

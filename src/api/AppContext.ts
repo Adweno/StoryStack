@@ -4,6 +4,7 @@ import { LibraryService } from "../services/LibraryService";
 import { CatalogSyncService } from "../services/CatalogSyncService";
 import { AuthService } from "../services/AuthService";
 import { createMetadataEnrichmentService, MetadataEnrichmentService } from "../services/MetadataEnrichmentService";
+import { CatalogScanner } from "../services/CatalogScanner";
 
 export class AppContext {
   readonly database: StoryStackDatabase;
@@ -18,7 +19,10 @@ export class AppContext {
     this.database = new StoryStackDatabase(databasePath);
     this.authService = new AuthService(this.database);
     this.libraryService = new LibraryService(this.database);
-    this.catalogSyncService = new CatalogSyncService(this.database);
+    this.catalogSyncService = new CatalogSyncService(
+      this.database,
+      new CatalogScanner(undefined, undefined, path.join(dataDir, "embedded-covers"))
+    );
     this.metadataEnrichmentService = createMetadataEnrichmentService(this.database, dataDir);
   }
 }

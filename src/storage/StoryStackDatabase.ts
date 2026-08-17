@@ -24,6 +24,8 @@ import type { LibraryRepository } from "../services/LibraryService";
 import { PasswordHasher } from "../services/PasswordHasher";
 
 const DEFAULT_SHELF_NAME = "Favorites";
+const FINISHED_SHELF_NAME = "Finished Books";
+const IN_PROGRESS_SHELF_NAME = "Books in Progress";
 
 export class StoryStackDatabase implements LibraryRepository {
   private readonly database: DatabaseSync;
@@ -422,12 +424,27 @@ export class StoryStackDatabase implements LibraryRepository {
   replaceVisibleCatalog(activeBookIds: string[]): number {
     const activeIds = new Set(activeBookIds);
     const visibleRows = this.database.prepare("SELECT id FROM books WHERE hidden = 0").all() as unknown as { id: string }[];
-    const removed = visibleRows.filter((row) => !activeIds.has(row.id)).length;
-    this.database.prepare("UPDATE books SET hidden = 1 WHERE hidden = 0").run();
-    for (let index = 0; index < activeBookIds.length; index += 500) {
-      const batch = activeBookIds.slice(index, index + 500);
-      const placeholders = batch.map(() => "?").join(", ");
-      this.database.prepare(`UPDATE books SET hidden = 0 WHERE id IN (${placeholders})`).run(...batch);
+    const removedBookIds = visibleRows.filter((row) => !activeIds.has(row.id)).map((row) => row.id);
+    const removed = removedBookIds.length;
+
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("UPDATE books SET hidden = 1 WHERE hidden = 0").run();
+      for (let index = 0; index < activeBookIds.length; index += 500) {
+        const batch = activeBookIds.slice(index, index + 500);
+        const placeholders = batch.map(() => "?").join(", ");
+        this.database.prepare(`UPDATE books SET hidden = 0 WHERE id IN (${placeholders})`).run(...batch);
+      }
+
+      if (removedBookIds.length > 0) {
+        const placeholders = removedBookIds.map(() => "?").join(", ");
+        this.database.prepare(`DELETE FROM shelf_books WHERE bookId IN (${placeholders})`).run(...removedBookIds);
+        this.database.prepare(`DELETE FROM user_library_books WHERE bookId IN (${placeholders})`).run(...removedBookIds);
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
     }
     return removed;
   }
@@ -465,7 +482,7 @@ export class StoryStackDatabase implements LibraryRepository {
         .prepare(
           `SELECT b.* FROM books b
            JOIN user_library_books ulb ON ulb.bookId = b.id
-           WHERE ulb.userId = ?
+           WHERE ulb.userId = ? AND b.hidden = 0
            ORDER BY ulb.addedAt DESC`
         )
         .all(userId) as unknown as BookRow[]
@@ -486,14 +503,21 @@ export class StoryStackDatabase implements LibraryRepository {
 
   async listShelves(userId: string): Promise<Shelf[]> {
     this.ensureDefaultShelf(userId);
-    return this.database
+    const shelves = this.database
       .prepare(
         `SELECT id, userId, name, createdAt
          FROM shelves
-         WHERE userId = ?
-         ORDER BY CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END, createdAt`
+         WHERE userId = ? AND lower(name) NOT IN (?, ?)
+         ORDER BY createdAt`
       )
-      .all(userId, DEFAULT_SHELF_NAME) as unknown as Shelf[];
+      .all(userId, FINISHED_SHELF_NAME.toLowerCase(), IN_PROGRESS_SHELF_NAME.toLowerCase()) as unknown as Shelf[];
+    const now = new Date(0).toISOString();
+    return [
+      ...shelves.filter((shelf) => shelf.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase()),
+      { id: this.systemShelfId(userId, "finished"), userId, name: FINISHED_SHELF_NAME, createdAt: now },
+      { id: this.systemShelfId(userId, "in-progress"), userId, name: IN_PROGRESS_SHELF_NAME, createdAt: now },
+      ...shelves.filter((shelf) => shelf.name.toLowerCase() !== DEFAULT_SHELF_NAME.toLowerCase())
+    ];
   }
 
   async createShelf(shelf: Shelf): Promise<void> {
@@ -519,6 +543,9 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   async deleteShelf(userId: string, shelfId: string): Promise<void> {
+    if (this.isSystemShelfId(userId, shelfId)) {
+      throw new Error("This shelf is managed automatically and cannot be deleted.");
+    }
     this.database.prepare("DELETE FROM shelves WHERE userId = ? AND id = ?").run(userId, shelfId);
   }
 
@@ -537,6 +564,22 @@ export class StoryStackDatabase implements LibraryRepository {
   }
 
   listShelfBookDetails(userId: string, shelfId: string): Book[] {
+    const systemStatus = this.systemShelfStatus(userId, shelfId);
+    if (systemStatus) {
+      return this.withBookReviewSummaries(
+        (
+          this.database
+            .prepare(
+              `SELECT b.* FROM books b
+               JOIN user_library_books ulb ON ulb.bookId = b.id
+               JOIN playback_progress pp ON pp.bookId = b.id AND pp.userId = ulb.userId
+               WHERE ulb.userId = ? AND b.hidden = 0 AND pp.status = ?
+               ORDER BY pp.updatedAt DESC`
+            )
+            .all(userId, systemStatus) as unknown as BookRow[]
+        ).map((row) => this.toBook(row))
+      );
+    }
     return this.withBookReviewSummaries(
       (
       this.database
@@ -544,12 +587,26 @@ export class StoryStackDatabase implements LibraryRepository {
           `SELECT b.* FROM books b
            JOIN shelf_books sb ON sb.bookId = b.id
            JOIN shelves s ON s.id = sb.shelfId
-           WHERE s.userId = ? AND s.id = ?
+           WHERE s.userId = ? AND s.id = ? AND b.hidden = 0
            ORDER BY sb.position`
         )
         .all(userId, shelfId) as unknown as BookRow[]
       ).map((row) => this.toBook(row))
     );
+  }
+
+  private systemShelfId(userId: string, kind: "finished" | "in-progress"): string {
+    return `system_shelf_${kind}_${userId}`;
+  }
+
+  private isSystemShelfId(userId: string, shelfId: string): boolean {
+    return shelfId === this.systemShelfId(userId, "finished") || shelfId === this.systemShelfId(userId, "in-progress");
+  }
+
+  private systemShelfStatus(userId: string, shelfId: string): PlaybackProgress["status"] | undefined {
+    if (shelfId === this.systemShelfId(userId, "finished")) return "finished";
+    if (shelfId === this.systemShelfId(userId, "in-progress")) return "in_progress";
+    return undefined;
   }
 
   async upsertProgress(progress: PlaybackProgress): Promise<void> {
