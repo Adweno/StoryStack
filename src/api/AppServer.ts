@@ -112,6 +112,15 @@ export class AppServer {
   }
 
   private routes(): void {
+    this.app.get("/privacy-policy.html", (_request, response) => {
+      const policyPath = path.resolve("dist/client/privacy-policy.html");
+      if (existsSync(policyPath)) {
+        response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        return response.sendFile(policyPath);
+      }
+      response.status(404).send("Privacy policy is not available until the client has been built.");
+    });
+
     this.app.get("/api/health", (_request, response) => {
       response.json({ ok: true, app: "Story Stack" });
     });

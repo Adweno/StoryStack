@@ -13,7 +13,8 @@
     "build": "tsc --noEmit && vite build",
     "start": "tsx src/server.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "play:release": "tsx scripts/play-release.ts"
   },
   "keywords": [],
   "author": "",

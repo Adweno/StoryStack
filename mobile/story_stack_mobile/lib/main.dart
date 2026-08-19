@@ -1611,6 +1611,9 @@ class _StoryShellState extends State<StoryShell> {
     final positionSeconds = forceFinished
         ? actualDuration.toDouble()
         : _wholePosition(book, activeTrackIndex, position).inSeconds.toDouble();
+    // Keep the offline Android Auto cache current while the phone app is
+    // playing. This prevents Auto from restoring an older position snapshot.
+    await _publishAndroidAutoPosition(book.id, positionSeconds);
     try {
       if (book.isLocalDevice) {
         final progress = await localDeviceLibrary.saveProgress(
@@ -1648,6 +1651,18 @@ class _StoryShellState extends State<StoryShell> {
         actualDuration.toDouble(),
       );
     }
+  }
+
+  Future<void> _publishAndroidAutoPosition(
+    String bookId,
+    double positionSeconds,
+  ) async {
+    if (!downloadedBookIds.contains(bookId)) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      'androidAutoProgress_$bookId',
+      positionSeconds.round(),
+    );
   }
 
   Future<void> _flushOfflineSync() async {

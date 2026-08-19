@@ -13,6 +13,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Base64
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -21,6 +22,7 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media.MediaBrowserServiceCompat
+import com.storystack.story_stack_mobile.R
 import java.io.File
 import java.util.concurrent.Executors
 import org.json.JSONArray
@@ -33,6 +35,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     private var player: ExoPlayer? = null
     private var currentBook: AutoBook? = null
     private var lastLibrary: List<AutoBook> = emptyList()
+    private var playbackSpeed = 1f
     private val progressSync = object : Runnable {
         override fun run() {
             saveCurrentProgress(false)
@@ -47,6 +50,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
             isActive = true
         }
+        playbackSpeed = readPlaybackSpeed()
         sessionToken = session.sessionToken
         setPlaybackState(PlaybackStateCompat.STATE_NONE)
     }
@@ -64,12 +68,22 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     }
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
+        // Android Auto can request the root more than once while the phone is
+        // attaching. Keep that first response synchronous and deterministic so
+        // a stale Flutter preference cannot make the entire app appear broken.
+        val requestedId = parentId.ifBlank { ROOT_ID }
+        if (requestedId == ROOT_ID) {
+            result.sendResult(rootItems().toMutableList())
+            return
+        }
+
         result.detach()
         worker.execute {
             val items = try {
-                childrenFor(parentId)
-            } catch (_: Exception) {
-                listOf(messageItem("story-stack-error", "Open Story Stack on your phone", "Sign in before using Android Auto."))
+                childrenFor(requestedId)
+            } catch (error: Throwable) {
+                Log.e(TAG, "Could not load Android Auto content for $requestedId", error)
+                listOf(messageItem("story-stack-error", "No downloaded books available", "Download a book in Story Stack first."))
             }
             result.sendResult(items.toMutableList())
         }
@@ -126,15 +140,17 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     private fun downloadedBooks(): List<AutoBook> {
         val root = downloadRoot()
         return loadDownloadedBookMetadata()
-            .filter { isFullyDownloaded(root, it) }
+            .filter { it.id.isNotBlank() && isFullyDownloaded(root, it) }
             .sortedBy { it.title }
     }
 
     private fun isFullyDownloaded(root: File, book: AutoBook): Boolean {
+        // Older builds wrote a single file even when the metadata reported
+        // multiple audio tracks. Accept that valid local representation too.
+        if (File(root, "${book.id}.audio").isFile) return true
         val trackCount = book.audioTrackCount.takeIf { it > 1 } ?: 1
         return (0 until trackCount).all { index ->
-            val name = if (trackCount == 1) "${book.id}.audio" else "${book.id}.$index.audio"
-            File(root, name).isFile
+            File(root, "${book.id}.$index.audio").isFile
         }
     }
 
@@ -156,11 +172,15 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
 
         // Keep compatibility with installs created before per-book metadata
         // was written, while still filtering against local files below.
-        val rawCatalog = prefs.getString("flutter.androidAutoBookCatalog", null)
+        val rawCatalog = runCatching {
+            prefs.getString("flutter.androidAutoBookCatalog", null)
+        }.getOrNull()
         if (!rawCatalog.isNullOrBlank()) {
             runCatching {
                 val books = JSONArray(rawCatalog)
-                (0 until books.length()).map { index -> AutoBook.fromJson(books.getJSONObject(index)) }
+                (0 until books.length()).mapNotNull { index ->
+                    runCatching { AutoBook.fromJson(books.getJSONObject(index)) }.getOrNull()
+                }
             }.getOrDefault(emptyList()).forEach { book ->
                 booksById.putIfAbsent(book.id, book)
             }
@@ -184,14 +204,17 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     private fun preparePlayer(book: AutoBook) {
         stopProgressSync()
         player?.release()
-        setPlaybackState(PlaybackStateCompat.STATE_BUFFERING)
         val preferences = flutterPrefs()
-        val savedPositionSeconds = preferences.getLong(
-            "flutter.androidAutoProgress_${book.id}",
-            preferences.getLong("androidAutoProgress_${book.id}", 0L)
-        )
+        val savedPositionSeconds = readStoredNumber(
+            preferences,
+            "flutter.androidAutoProgress_${book.id}"
+        ) ?: readStoredNumber(preferences, "androidAutoProgress_${book.id}") ?: 0L
         val savedPositionMs = savedPositionSeconds
             .coerceAtLeast(0L) * 1000L
+        // Publish the known position before ExoPlayer has prepared. Android
+        // Auto can render this state immediately instead of showing 00:00.
+        setPlaybackState(PlaybackStateCompat.STATE_BUFFERING, savedPositionMs)
+        var restoredSeekApplied = false
 
         val nextPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(
@@ -212,7 +235,15 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     when (playbackState) {
                         Player.STATE_READY -> {
-                            setPlaybackState(if (nextPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED)
+                            if (!restoredSeekApplied && savedPositionMs > 0L) {
+                                val maxPosition = (nextPlayer.duration - 1000L).coerceAtLeast(0L)
+                                nextPlayer.seekTo(savedPositionMs.coerceAtMost(maxPosition))
+                                restoredSeekApplied = true
+                            }
+                            setPlaybackState(
+                                if (nextPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                                nextPlayer.currentPosition
+                            )
                             startProgressSync()
                         }
                         Player.STATE_ENDED -> {
@@ -250,10 +281,11 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             nextPlayer.setMediaItems(mediaItems)
         }
         player = nextPlayer
-        nextPlayer.prepare()
         if (savedPositionMs > 0L) {
             nextPlayer.seekTo(savedPositionMs)
         }
+        nextPlayer.setPlaybackSpeed(playbackSpeed)
+        nextPlayer.prepare()
         nextPlayer.playWhenReady = true
     }
 
@@ -268,9 +300,9 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         session.setMetadata(builder.build())
     }
 
-    private fun setPlaybackState(state: Int) {
+    private fun setPlaybackState(state: Int, positionOverride: Long? = null) {
         val currentPosition = try {
-            player?.currentPosition ?: PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN
+            positionOverride ?: player?.currentPosition ?: PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN
         } catch (_: Exception) {
             PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN
         }
@@ -282,12 +314,56 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
             PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
             PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID
+        val speedAction = PlaybackStateCompat.CustomAction.Builder(
+            SPEED_ACTION,
+            speedLabel(playbackSpeed),
+            speedIcon(playbackSpeed)
+        ).build()
         session.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
-                .setState(state, currentPosition, 1f)
+                .addCustomAction(speedAction)
+                .setState(state, currentPosition, playbackSpeed)
                 .build()
         )
+    }
+
+    private fun readPlaybackSpeed(): Float {
+        val stored = flutterPrefs().getFloat("androidAutoPlaybackSpeed", 1f)
+        return stored.takeIf { it in 0.5f..2f } ?: 1f
+    }
+
+    private fun readStoredNumber(
+        preferences: SharedPreferences,
+        key: String
+    ): Long? {
+        return (preferences.all[key] as? Number)?.toLong()
+    }
+
+    private fun speedLabel(speed: Float): String {
+        return if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"
+    }
+
+    // Android Auto does not render custom-action titles on the now-playing
+    // surface, so the current value must be encoded in the static icon.
+    private fun speedIcon(speed: Float): Int {
+        return when {
+            kotlin.math.abs(speed - 0.75f) < 0.01f -> R.drawable.ic_speed_075
+            kotlin.math.abs(speed - 1.25f) < 0.01f -> R.drawable.ic_speed_125
+            kotlin.math.abs(speed - 1.5f) < 0.01f -> R.drawable.ic_speed_15
+            kotlin.math.abs(speed - 1.75f) < 0.01f -> R.drawable.ic_speed_175
+            kotlin.math.abs(speed - 2f) < 0.01f -> R.drawable.ic_speed_2
+            else -> R.drawable.ic_speed_1
+        }
+    }
+
+    private fun cyclePlaybackSpeed() {
+        val speeds = floatArrayOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+        val currentIndex = speeds.indexOfFirst { kotlin.math.abs(it - playbackSpeed) < 0.01f }
+        playbackSpeed = speeds[(currentIndex + 1).mod(speeds.size)]
+        player?.setPlaybackSpeed(playbackSpeed)
+        flutterPrefs().edit().putFloat("androidAutoPlaybackSpeed", playbackSpeed).apply()
+        setPlaybackState(if (player?.isPlaying == true) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED)
     }
 
     private fun seekBy(deltaMs: Int) {
@@ -365,7 +441,18 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     private fun coverBitmap(book: AutoBook): Bitmap? {
         val cover = File(downloadRoot(), "${book.id}.cover")
         if (!cover.isFile) return null
-        return runCatching { BitmapFactory.decodeFile(cover.absolutePath) }.getOrNull()
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(cover.absolutePath, bounds)
+            val longestSide = maxOf(bounds.outWidth, bounds.outHeight)
+            val sampleSize = if (longestSide > 512) {
+                Integer.highestOneBit((longestSide / 512).coerceAtLeast(1))
+            } else {
+                1
+            }
+            val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            BitmapFactory.decodeFile(cover.absolutePath, options)
+        }.getOrNull()
     }
 
     private fun messageItem(mediaId: String, title: String, subtitle: String): MediaBrowserCompat.MediaItem {
@@ -432,6 +519,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
             when (action) {
                 SKIP_BACK_ACTION -> seekBy(-SKIP_MS)
                 SKIP_FORWARD_ACTION -> seekBy(SKIP_MS)
+                SPEED_ACTION -> cyclePlaybackSpeed()
                 else -> super.onCustomAction(action, extras)
             }
         }
@@ -471,7 +559,8 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
                     seriesOrder = optDoubleOrNull(json, "seriesOrder"),
                     publicationYear = optIntOrNull(json, "publicationYear"),
                     durationSeconds = optIntOrNull(json, "durationSeconds"),
-                    audioTrackCount = tracks?.length() ?: 0,
+                    audioTrackCount = (tracks?.length() ?: 0).takeIf { it > 0 }
+                        ?: json.optInt("audioTrackCount", 1),
                     localTrackPaths = localTrackPaths
                 )
             }
@@ -487,6 +576,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     }
 
     companion object {
+        private const val TAG = "StoryStackAutoService"
         private const val ROOT_ID = "story-stack-root"
         private const val BOOKS_ID = "story-stack-books"
         private const val SERIES_ID = "story-stack-series"
@@ -497,6 +587,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         private const val SKIP_MS = 30000
         private const val SKIP_BACK_ACTION = "com.storystack.story_stack_mobile.auto.SKIP_BACK_30"
         private const val SKIP_FORWARD_ACTION = "com.storystack.story_stack_mobile.auto.SKIP_FORWARD_30"
+        private const val SPEED_ACTION = "com.storystack.story_stack_mobile.auto.SPEED"
         private const val RESERVE_SKIP_TO_PREVIOUS_SLOT = "android.media.playback.ALWAYS_RESERVE_SPACE_FOR.ACTION_SKIP_TO_PREVIOUS"
         private const val RESERVE_SKIP_TO_NEXT_SLOT = "android.media.playback.ALWAYS_RESERVE_SPACE_FOR.ACTION_SKIP_TO_NEXT"
     }
