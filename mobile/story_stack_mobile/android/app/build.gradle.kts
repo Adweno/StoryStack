@@ -49,6 +49,11 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
+            // audio_service resolves notification control icons by resource
+            // name at runtime, so resource shrinking can remove them even
+            // though they are referenced from plugin code.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

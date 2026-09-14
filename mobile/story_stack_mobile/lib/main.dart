@@ -21,7 +21,9 @@ Future<void> main() async {
     androidNotificationChannelName: 'Story Stack playback',
     androidNotificationOngoing: true,
     androidShowNotificationBadge: false,
-    androidStopForegroundOnPause: true,
+    // Keep the media foreground service alive across transient pauses and
+    // background transitions so Android can continue background playback.
+    androidStopForegroundOnPause: false,
     fastForwardInterval: const Duration(seconds: 30),
     rewindInterval: const Duration(seconds: 30),
   );
@@ -42,6 +44,69 @@ MediaItem _mediaItemFor(Book book, {int? trackIndex}) => MediaItem(
             : Duration(seconds: book.audioTracks[trackIndex].durationSeconds!)),
   extras: {'bookId': book.id, 'trackIndex': trackIndex},
 );
+
+class PlaybackCheckpoint {
+  const PlaybackCheckpoint({
+    required this.positionSeconds,
+    required this.durationSeconds,
+    required this.finished,
+  });
+
+  final double positionSeconds;
+  final double durationSeconds;
+  final bool finished;
+
+  Map<String, dynamic> toJson() => {
+    'positionSeconds': positionSeconds,
+    'durationSeconds': durationSeconds,
+    'finished': finished,
+  };
+
+  static PlaybackCheckpoint? fromJson(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final position = (data['positionSeconds'] as num?)?.toDouble();
+      final duration = (data['durationSeconds'] as num?)?.toDouble();
+      if (position == null ||
+          duration == null ||
+          position < 0 ||
+          duration <= 0) {
+        return null;
+      }
+      return PlaybackCheckpoint(
+        positionSeconds: position,
+        durationSeconds: duration,
+        finished: data['finished'] == true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class PlaybackCheckpointStore {
+  const PlaybackCheckpointStore(this.prefs, this.userId);
+
+  final SharedPreferences prefs;
+  final String userId;
+
+  String key(String bookId) => 'playbackCheckpoint_${userId}_$bookId';
+
+  Future<void> save(String bookId, PlaybackCheckpoint checkpoint) async {
+    await prefs.setString(key(bookId), jsonEncode(checkpoint.toJson()));
+  }
+
+  PlaybackCheckpoint? read(String bookId) =>
+      PlaybackCheckpoint.fromJson(prefs.getString(key(bookId)));
+
+  Future<void> clear(String bookId) => prefs.remove(key(bookId));
+
+  Iterable<String> get bookIds => prefs
+      .getKeys()
+      .where((key) => key.startsWith('playbackCheckpoint_${userId}_'))
+      .map((key) => key.substring('playbackCheckpoint_${userId}_'.length));
+}
 
 const _defaultServerUrl = '';
 const _defaultShelfName = 'Favorites';
@@ -74,9 +139,9 @@ const _metadataFileNames = {'metadata.json', 'book.json', 'desc.json'};
 
 Future<List<Shelf>> ensureDefaultShelf(
   StoryStackApi api,
-  List<Shelf> shelves,
-  {String? userId}
-) async {
+  List<Shelf> shelves, {
+  String? userId,
+}) async {
   final hasDefaultShelf = shelves.any(
     (shelf) => shelf.name.toLowerCase() == _defaultShelfName.toLowerCase(),
   );
@@ -91,12 +156,7 @@ Future<List<Shelf>> ensureDefaultShelf(
       if (!nextShelves.any(
         (shelf) => shelf.name.toLowerCase() == entry.$2.toLowerCase(),
       )) {
-        nextShelves.add(
-          Shelf(
-            id: entry.$1,
-            name: entry.$2,
-          ),
-        );
+        nextShelves.add(Shelf(id: entry.$1, name: entry.$2));
       }
     }
   }
@@ -713,7 +773,7 @@ class StoryShell extends StatefulWidget {
   State<StoryShell> createState() => _StoryShellState();
 }
 
-class _StoryShellState extends State<StoryShell> {
+class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   static const Color storeBackground = Color(0xff081022);
   static const Color storeSurface = Color(0xff111c38);
   static const Color storeSurfaceAlt = Color(0xff111b34);
@@ -806,6 +866,7 @@ class _StoryShellState extends State<StoryShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     castManager = CastManager(widget.api, downloads);
     syncQueue = OfflineSyncQueue(widget.user.id);
     castManager.addListener(() {
@@ -841,12 +902,16 @@ class _StoryShellState extends State<StoryShell> {
       }
     });
     player.playerStateStream.listen((state) {
-      if (_wasPlaying && !state.playing &&
+      if (_wasPlaying &&
+          !state.playing &&
           state.processingState != ProcessingState.completed) {
         final book = playingBook;
         if (book != null && !sampleMode && !castManager.isCasting) {
           _pausedAt = DateTime.now();
           _pausedPosition = _wholePosition(book, activeTrackIndex, position);
+          // Android Auto may take over immediately after the phone pauses.
+          // Publish the latest position now instead of waiting for the timer.
+          unawaited(_saveProgress());
         }
       } else if (!_wasPlaying && state.playing) {
         unawaited(_applyAutoRewindIfNeeded());
@@ -867,11 +932,23 @@ class _StoryShellState extends State<StoryShell> {
   void dispose() {
     progressTimer?.cancel();
     unawaited(_saveProgress());
+    WidgetsBinding.instance.removeObserver(this);
     pageController.dispose();
     searchController.dispose();
     player.dispose();
     castManager.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      // Flush before another playback surface, such as Android Auto, can
+      // become the active controller.
+      unawaited(_saveProgress());
+    }
   }
 
   void setStateSafe(VoidCallback callback) {
@@ -904,10 +981,7 @@ class _StoryShellState extends State<StoryShell> {
       // The remote library backfill uses the downloaded-book index. Wait for
       // it before loading the library so existing downloads are eligible for
       // cover caching on the first launch after an update.
-      await Future.wait([
-        downloads.init(),
-        localDeviceLibrary.init(),
-      ]);
+      await Future.wait([downloads.init(), localDeviceLibrary.init()]);
       final sourceState = await Future.wait([
         localDeviceLibrary.loadSource(),
         localDeviceLibrary.loadScanState(),
@@ -929,8 +1003,13 @@ class _StoryShellState extends State<StoryShell> {
               (book) => book.copyWith(inLibrary: libraryIds.contains(book.id)),
             )
             .toList();
-        final progress = await _consumeAndroidAutoProgress(
+        final recoveredProgress = await _recoverPlaybackCheckpoints(
           await localDeviceLibrary.loadProgress(),
+          books: selectedBooks,
+          localDevice: true,
+        );
+        final progress = await _consumeAndroidAutoProgress(
+          recoveredProgress,
           books: selectedBooks,
           localDevice: true,
         );
@@ -982,6 +1061,18 @@ class _StoryShellState extends State<StoryShell> {
       final remoteProgress = {
         for (final item in library.progress) item.bookId: item,
       };
+      // Consume Android Auto's shared handoff before the first paint so a
+      // phone-opened book cannot use an older server snapshot.
+      final recoveredProgress = await _recoverPlaybackCheckpoints(
+        remoteProgress,
+        books: library.books,
+        localDevice: false,
+      );
+      final currentProgress = await _consumeAndroidAutoProgress(
+        recoveredProgress,
+        books: library.books,
+        localDevice: false,
+      );
       setStateSafe(() {
         librarySourceMode = localSource;
         remoteAccessAddress = sourceAddresses.remoteAccessAddress;
@@ -993,13 +1084,13 @@ class _StoryShellState extends State<StoryShell> {
             !sortedStore.any((book) => book.id == featuredStoreBook!.id)) {
           featuredStoreBook = _randomStoreBook(sortedStore);
         }
-        progressByBook = remoteProgress;
+        progressByBook = currentProgress;
         loading = false;
       });
       unawaited(
         _finishRemoteHydration(
           library: library,
-          remoteProgress: remoteProgress,
+          remoteProgress: currentProgress,
         ),
       );
     } catch (exception) {
@@ -1082,6 +1173,39 @@ class _StoryShellState extends State<StoryShell> {
         await prefs.remove('androidAutoPendingProgress_$bookId');
       } catch (_) {
         // Keep the handoff key so a later online app launch can retry it.
+      }
+    }
+    return merged;
+  }
+
+  Future<Map<String, PlaybackProgress>> _recoverPlaybackCheckpoints(
+    Map<String, PlaybackProgress> progress, {
+    required Iterable<Book> books,
+    required bool localDevice,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final checkpoints = PlaybackCheckpointStore(prefs, widget.user.id);
+    final booksById = {for (final book in books) book.id: book};
+    final merged = {...progress};
+    for (final bookId in checkpoints.bookIds.toList()) {
+      final checkpoint = checkpoints.read(bookId);
+      if (checkpoint == null || !booksById.containsKey(bookId)) continue;
+      try {
+        final saved = localDevice
+            ? await localDeviceLibrary.saveProgress(
+                bookId,
+                checkpoint.positionSeconds,
+                checkpoint.durationSeconds,
+              )
+            : await widget.api.saveProgress(
+                bookId,
+                checkpoint.positionSeconds,
+                checkpoint.durationSeconds,
+              );
+        merged[bookId] = saved;
+        await checkpoints.clear(bookId);
+      } catch (_) {
+        // Keep the checkpoint for the next launch when the server is offline.
       }
     }
     return merged;
@@ -1253,7 +1377,11 @@ class _StoryShellState extends State<StoryShell> {
     if (castManager.isCasting) {
       await castManager.stopCasting();
     }
-    await _saveProgress();
+    // Do not block starting the next book on a progress sync for the
+    // previous one. This is especially noticeable when starting a download
+    // offline or over a slow connection; the local file can begin preparing
+    // immediately while the previous position is saved in the background.
+    unawaited(_saveProgress());
     _clearPauseTracking();
     final trackDurations = _trackDurations(book);
     final progress = progressByBook[book.id];
@@ -1518,8 +1646,11 @@ class _StoryShellState extends State<StoryShell> {
     final book = playingBook;
     final pausedAt = _pausedAt;
     final pausedPosition = _pausedPosition;
-    if (book == null || pausedAt == null || pausedPosition == null ||
-        sampleMode || castManager.isCasting) {
+    if (book == null ||
+        pausedAt == null ||
+        pausedPosition == null ||
+        sampleMode ||
+        castManager.isCasting) {
       return;
     }
 
@@ -1611,6 +1742,16 @@ class _StoryShellState extends State<StoryShell> {
     final positionSeconds = forceFinished
         ? actualDuration.toDouble()
         : _wholePosition(book, activeTrackIndex, position).inSeconds.toDouble();
+    final prefs = await SharedPreferences.getInstance();
+    final checkpoints = PlaybackCheckpointStore(prefs, widget.user.id);
+    await checkpoints.save(
+      book.id,
+      PlaybackCheckpoint(
+        positionSeconds: positionSeconds,
+        durationSeconds: actualDuration.toDouble(),
+        finished: forceFinished,
+      ),
+    );
     // Keep the offline Android Auto cache current while the phone app is
     // playing. This prevents Auto from restoring an older position snapshot.
     await _publishAndroidAutoPosition(book.id, positionSeconds);
@@ -1622,6 +1763,7 @@ class _StoryShellState extends State<StoryShell> {
           actualDuration.toDouble(),
         );
         _applyProgressState(progress);
+        await checkpoints.clear(book.id);
         return;
       }
       final progress = await widget.api.saveProgress(
@@ -1632,13 +1774,14 @@ class _StoryShellState extends State<StoryShell> {
       await syncQueue.discardProgress(book.id);
       await syncQueue.flush(widget.api);
       _applyProgressState(progress);
+      await checkpoints.clear(book.id);
     } catch (_) {
       final queuedProgress = PlaybackProgress(
         userId: widget.user.id,
         bookId: book.id,
         positionSeconds: positionSeconds,
         durationSeconds: actualDuration.toDouble(),
-        status: forceFinished || positionSeconds >= actualDuration * .98
+        status: forceFinished || positionSeconds >= actualDuration
             ? ProgressStatus.finished
             : positionSeconds > 0
             ? ProgressStatus.inProgress
@@ -1659,10 +1802,7 @@ class _StoryShellState extends State<StoryShell> {
   ) async {
     if (!downloadedBookIds.contains(bookId)) return;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(
-      'androidAutoProgress_$bookId',
-      positionSeconds.round(),
-    );
+    await prefs.setInt('androidAutoProgress_$bookId', positionSeconds.round());
   }
 
   Future<void> _flushOfflineSync() async {
@@ -1873,13 +2013,12 @@ class _StoryShellState extends State<StoryShell> {
       await widget.api.removeFromLibrary(book.id);
     }
     setStateSafe(() {
-      libraryBooks = libraryBooks
-          .where((item) => item.id != book.id)
-          .toList();
+      libraryBooks = libraryBooks.where((item) => item.id != book.id).toList();
       storeBooks = storeBooks
-          .map((item) => item.id == book.id
-              ? item.copyWith(inLibrary: false)
-              : item)
+          .map(
+            (item) =>
+                item.id == book.id ? item.copyWith(inLibrary: false) : item,
+          )
           .toList();
       if (selectedBook?.id == book.id) selectedBook = null;
     });
@@ -3289,7 +3428,9 @@ class BookCard extends StatelessWidget {
                       const SizedBox(width: 3),
                       CompactIconButton(
                         icon: book.inLibrary ? Icons.check : Icons.add,
-                        tooltip: book.inLibrary ? 'Remove from library' : 'Add to library',
+                        tooltip: book.inLibrary
+                            ? 'Remove from library'
+                            : 'Add to library',
                         filled: true,
                         onPressed: book.inLibrary ? onRemove : onAdd,
                       ),
@@ -4690,8 +4831,7 @@ class ShelvesPage extends StatelessWidget {
           final shelfName = shelf.name.toLowerCase();
           final isFavorites = shelfName == _defaultShelfName.toLowerCase();
           final isFinished = shelfName == _finishedShelfName.toLowerCase();
-          final isInProgress =
-              shelfName == _inProgressShelfName.toLowerCase();
+          final isInProgress = shelfName == _inProgressShelfName.toLowerCase();
           final accent = isFavorites
               ? colorScheme.primary
               : isFinished
@@ -7365,7 +7505,7 @@ class LocalDeviceLibraryStore {
       status:
           durationSeconds != null &&
               durationSeconds > 0 &&
-              positionSeconds >= durationSeconds * 0.98
+              positionSeconds >= durationSeconds
           ? ProgressStatus.finished
           : positionSeconds > 0
           ? ProgressStatus.inProgress

@@ -36,6 +36,12 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     private var currentBook: AutoBook? = null
     private var lastLibrary: List<AutoBook> = emptyList()
     private var playbackSpeed = 1f
+    // Android Auto can deliver the first pause/seek/skip immediately after
+    // selecting a book, before the worker has prepared ExoPlayer. Retain
+    // those commands so a newly selected book remains controllable.
+    private var pendingPlayState: Boolean? = null
+    private var pendingSeekPositionMs: Long? = null
+    private var pendingSeekOffsetMs = 0L
     private val progressSync = object : Runnable {
         override fun run() {
             saveCurrentProgress(false)
@@ -56,6 +62,8 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     }
 
     override fun onDestroy() {
+        // The phone may be opened immediately after Auto closes.
+        saveCurrentProgress(false)
         stopProgressSync()
         player?.release()
         session.release()
@@ -189,6 +197,9 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     }
 
     private fun playBook(bookId: String) {
+        pendingPlayState = true
+        pendingSeekPositionMs = null
+        pendingSeekOffsetMs = 0L
         worker.execute {
             val book = lastLibrary.find { it.id == bookId }
                 ?: downloadedBooks().firstOrNull { it.id == bookId }
@@ -205,10 +216,15 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         stopProgressSync()
         player?.release()
         val preferences = flutterPrefs()
+        // Auto writes its live position to the pending handoff key. Prefer it
+        // when reconnecting to the car; the published key can still contain
+        // the position from the previous Auto session until the phone opens.
         val savedPositionSeconds = readStoredNumber(
             preferences,
-            "flutter.androidAutoProgress_${book.id}"
-        ) ?: readStoredNumber(preferences, "androidAutoProgress_${book.id}") ?: 0L
+            "flutter.androidAutoPendingProgress_${book.id}"
+        ) ?: readStoredNumber(preferences, "flutter.androidAutoProgress_${book.id}")
+            ?: readStoredNumber(preferences, "androidAutoProgress_${book.id}")
+            ?: 0L
         val savedPositionMs = savedPositionSeconds
             .coerceAtLeast(0L) * 1000L
         // Publish the known position before ExoPlayer has prepared. Android
@@ -286,7 +302,14 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         }
         nextPlayer.setPlaybackSpeed(playbackSpeed)
         nextPlayer.prepare()
-        nextPlayer.playWhenReady = true
+        pendingSeekPositionMs?.let { nextPlayer.seekTo(it.coerceAtLeast(0L)) }
+        if (pendingSeekOffsetMs != 0L) {
+            nextPlayer.seekTo((nextPlayer.currentPosition + pendingSeekOffsetMs).coerceAtLeast(0L))
+        }
+        nextPlayer.playWhenReady = pendingPlayState ?: true
+        pendingSeekPositionMs = null
+        pendingSeekOffsetMs = 0L
+        pendingPlayState = null
     }
 
     private fun setMetadata(book: AutoBook) {
@@ -367,7 +390,11 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
     }
 
     private fun seekBy(deltaMs: Int) {
-        val activePlayer = player ?: return
+        val activePlayer = player
+        if (activePlayer == null) {
+            pendingSeekOffsetMs += deltaMs.toLong()
+            return
+        }
         val duration = try {
             activePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         } catch (_: Exception) {
@@ -403,11 +430,11 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         }
         flutterPrefs().edit()
             .putLong("flutter.androidAutoPendingProgress_${book.id}", positionSeconds.toLong())
-            .apply()
+            .commit()
         if (durationSeconds != null && finished) {
             flutterPrefs().edit()
                 .putLong("flutter.androidAutoPendingProgress_${book.id}", durationSeconds.toLong())
-                .apply()
+                .commit()
         }
     }
 
@@ -475,28 +502,49 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         }
 
         override fun onPlay() {
-            player?.play()
+            val activePlayer = player
+            if (activePlayer == null) {
+                pendingPlayState = true
+                return
+            }
+            activePlayer.play()
             setPlaybackState(PlaybackStateCompat.STATE_PLAYING)
             startProgressSync()
         }
 
         override fun onPause() {
-            player?.pause()
+            val activePlayer = player
+            if (activePlayer == null) {
+                pendingPlayState = false
+                return
+            }
+            activePlayer.pause()
             setPlaybackState(PlaybackStateCompat.STATE_PAUSED)
             saveCurrentProgress(false)
             stopProgressSync()
         }
 
         override fun onStop() {
-            player?.stop()
+            val activePlayer = player
+            if (activePlayer == null) {
+                pendingPlayState = false
+                return
+            }
+            activePlayer.stop()
             setPlaybackState(PlaybackStateCompat.STATE_STOPPED)
             saveCurrentProgress(false)
             stopProgressSync()
         }
 
         override fun onSeekTo(pos: Long) {
-            player?.seekTo(pos)
-            setPlaybackState(PlaybackStateCompat.STATE_PLAYING)
+            val activePlayer = player
+            if (activePlayer == null) {
+                pendingSeekPositionMs = pos
+                return
+            }
+            activePlayer.seekTo(pos)
+            setPlaybackState(if (activePlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED)
+            saveCurrentProgress(false)
         }
 
         override fun onFastForward() {

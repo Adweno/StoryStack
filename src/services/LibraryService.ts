@@ -145,7 +145,7 @@ export class LibraryService {
   }
 
   private getListeningStatus(positionSeconds: number, durationSeconds?: number): PlaybackProgress["status"] {
-    if (durationSeconds && durationSeconds > 0 && positionSeconds >= durationSeconds * 0.95) {
+    if (durationSeconds && durationSeconds > 0 && positionSeconds >= durationSeconds) {
       return "finished";
     }
     return positionSeconds > 0 ? "in_progress" : "not_started";

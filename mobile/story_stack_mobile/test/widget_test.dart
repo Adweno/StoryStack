@@ -102,13 +102,19 @@ void main() {
     };
 
     expect(
-      managedShelfBooksFor(books, progress, 'Finished Books')
-          .map((book) => book.id),
+      managedShelfBooksFor(
+        books,
+        progress,
+        'Finished Books',
+      ).map((book) => book.id),
       ['finished'],
     );
     expect(
-      managedShelfBooksFor(books, progress, 'Books in Progress')
-          .map((book) => book.id),
+      managedShelfBooksFor(
+        books,
+        progress,
+        'Books in Progress',
+      ).map((book) => book.id),
       ['progress'],
     );
   });
@@ -199,6 +205,36 @@ void main() {
     expect(summary?.timeLeft, Duration.zero);
   });
 
+  test(
+    'playback checkpoint round-trips and is cleared after recovery',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final store = PlaybackCheckpointStore(prefs, 'checkpoint-user');
+      const checkpoint = PlaybackCheckpoint(
+        positionSeconds: 3599,
+        durationSeconds: 3600,
+        finished: false,
+      );
+
+      await store.save('book-1', checkpoint);
+
+      expect(store.read('book-1')?.positionSeconds, 3599);
+      expect(store.read('book-1')?.finished, isFalse);
+      expect(store.bookIds, contains('book-1'));
+
+      await store.clear('book-1');
+
+      expect(store.read('book-1'), isNull);
+      expect(store.bookIds, isEmpty);
+    },
+  );
+
+  test('invalid playback checkpoints are ignored', () {
+    expect(PlaybackCheckpoint.fromJson('{"positionSeconds":3599}'), isNull);
+    expect(PlaybackCheckpoint.fromJson('not-json'), isNull);
+  });
+
   test('download cleanup matches only the requested book artifacts', () {
     expect(isDownloadArtifactForBook('book.audio', 'book'), isTrue);
     expect(isDownloadArtifactForBook('book.audio.part', 'book'), isTrue);
@@ -241,8 +277,6 @@ void main() {
 
 class _TestShelfApi extends StoryStackApi {
   @override
-  Future<Shelf> createShelf(String name) async => Shelf(
-    id: 'shelf-$name',
-    name: name,
-  );
+  Future<Shelf> createShelf(String name) async =>
+      Shelf(id: 'shelf-$name', name: name);
 }
