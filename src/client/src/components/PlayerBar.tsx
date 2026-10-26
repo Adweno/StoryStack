@@ -94,8 +94,28 @@ export function PlayerBar({
 
     lastSavedSecondRef.current = currentSecond;
     onProgressUpdate?.(book.id, positionSeconds, durationSeconds);
-    void api.saveProgress(book.id, positionSeconds, durationSeconds).catch(() => syncQueue.enqueueProgress(book.id, positionSeconds, durationSeconds));
   };
+
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession || !book) return;
+    mediaSession.metadata = new MediaMetadata({ title: book.title, artist: book.author, album: book.series ?? "Story Stack" });
+    const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      ["play", () => { void audioRef.current?.play(); }],
+      ["pause", () => audioRef.current?.pause()],
+      ["seekbackward", () => { if (audioRef.current) audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 15); }],
+      ["seekforward", () => { if (audioRef.current) audioRef.current.currentTime += 15; }]
+    ];
+    actions.forEach(([action, handler]) => {
+      try { mediaSession.setActionHandler(action, handler); } catch { /* unsupported action */ }
+    });
+    return () => {
+      mediaSession.metadata = null;
+      actions.forEach(([action]) => {
+        try { mediaSession.setActionHandler(action, null); } catch { /* unsupported action */ }
+      });
+    };
+  }, [book?.id, playback?.mode]);
 
   useEffect(() => {
     setPlaying(false);
@@ -264,22 +284,29 @@ export function PlayerBar({
     if (!book || playback?.mode !== "play") return;
     const title = window.prompt("Bookmark note", `Bookmark at ${formatTime(progressValue)}`);
     if (title === null) return;
+    const localId = `offline-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const now = new Date().toISOString();
+    const localBookmark: BookBookmark = { id: localId, bookId: book.id, userId: "offline", positionSeconds: progressValue, title, createdAt: now, updatedAt: now };
+    setBookmarks((current) => [...current, localBookmark].sort((left, right) => left.positionSeconds - right.positionSeconds));
     try {
       const bookmark = await api.createBookBookmark(book.id, { positionSeconds: progressValue, title });
-      setBookmarks((current) => [...current, bookmark].sort((left, right) => left.positionSeconds - right.positionSeconds));
+      setBookmarks((current) => current.map((item) => item.id === localId ? bookmark : item).sort((left, right) => left.positionSeconds - right.positionSeconds));
     } catch {
-      syncQueue.enqueueBookmarkCreate(book.id, progressValue, title);
+      syncQueue.enqueueBookmarkCreate(book.id, localId, progressValue, title);
     }
   };
 
   const removeBookmark = async (bookmark: BookBookmark) => {
     if (!book) return;
+    setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
     try {
       await api.deleteBookBookmark(book.id, bookmark.id);
-      setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
     } catch {
-      syncQueue.enqueueBookmarkDelete(book.id, bookmark.id);
-      setBookmarks((current) => current.filter((item) => item.id !== bookmark.id));
+      if (bookmark.id.startsWith("offline-")) {
+        syncQueue.cancelBookmarkCreate(book.id, bookmark.id);
+      } else {
+        syncQueue.enqueueBookmarkDelete(book.id, bookmark.id);
+      }
     }
   };
 

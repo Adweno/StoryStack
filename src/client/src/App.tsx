@@ -63,9 +63,24 @@ function isManagedShelf(shelf: Shelf): boolean {
   return MANAGED_SHELF_NAMES.has(shelf.name.trim().toLowerCase());
 }
 
-async function ensureDefaultShelf(api: ApiClient, shelfList: Shelf[]): Promise<Shelf[]> {
+function booksForShelf(shelf: Shelf, books: Book[], progress: PlaybackProgress[]): Book[] {
+  const shelfName = shelf.name.trim().toLowerCase();
+  if (shelfName === "finished books" || shelfName === "books in progress") {
+    const progressByBookId = new Map(progress.map((item) => [item.bookId, item]));
+    const wantedStatus = shelfName === "finished books" ? "finished" : "in_progress";
+    return books.filter((book) => progressByBookId.get(book.id)?.status === wantedStatus);
+  }
+  return [];
+}
+
+async function ensureDefaultShelf(api: ApiClient, shelfList: Shelf[], userId: string): Promise<Shelf[]> {
   const existing = shelfList.find((shelf) => shelf.name.toLowerCase() === DEFAULT_SHELF_NAME.toLowerCase());
-  const shelvesWithDefault = existing ? shelfList : [...shelfList, await api.createShelf(DEFAULT_SHELF_NAME)];
+  const shelvesWithDefault = existing ? [...shelfList] : [...shelfList, await api.createShelf(DEFAULT_SHELF_NAME)];
+  for (const [id, name] of [[`system_shelf_finished_${userId}`, "Finished Books"], [`system_shelf_in-progress_${userId}`, "Books in Progress"]] as const) {
+    if (!shelvesWithDefault.some((shelf) => shelf.name.toLowerCase() === name.toLowerCase())) {
+      shelvesWithDefault.push({ id, userId, name, createdAt: new Date(0).toISOString() });
+    }
+  }
   return [...shelvesWithDefault].sort((left, right) => {
     const rank = (shelf: Shelf) => {
       const name = shelf.name.trim().toLowerCase();
@@ -176,6 +191,12 @@ export function App() {
   }, [selectedBook?.id, selectedShelf?.id, space, view]);
 
   useEffect(() => {
+    if (selectedShelf && isManagedShelf(selectedShelf)) {
+      setSelectedShelfBooks(booksForShelf(selectedShelf, libraryBooks, Object.values(playbackProgressByBookId)));
+    }
+  }, [libraryBooks, playbackProgressByBookId, selectedShelf]);
+
+  useEffect(() => {
     void refresh().finally(() => setAuthChecked(true));
   }, []);
 
@@ -268,7 +289,7 @@ export function App() {
   const refresh = async () => {
     try {
       const [me, store, library, shelfList] = await Promise.all([api.me(), api.store(query), api.library(), api.shelves()]);
-      const shelvesWithDefault = await ensureDefaultShelf(api, shelfList);
+      const shelvesWithDefault = await ensureDefaultShelf(api, shelfList, me.id);
       window.localStorage.setItem(LAST_USER_KEY, JSON.stringify(me));
       setOfflineOnly(false);
       setUser(me);
@@ -278,8 +299,9 @@ export function App() {
       setCachedOfflineBooks(await offlineCache.listBooks());
       setShelves(shelvesWithDefault);
       if (selectedShelf) {
-        const shelfBooks = await api.shelfBooks(selectedShelf.id);
-        setSelectedShelfBooks(shelfBooks);
+        setSelectedShelfBooks(isManagedShelf(selectedShelf)
+          ? booksForShelf(selectedShelf, library.books, library.progress)
+          : await api.shelfBooks(selectedShelf.id));
       }
     } catch (error) {
       const cachedBooks = await offlineCache.listBooks();
@@ -416,36 +438,53 @@ export function App() {
   };
 
   const addToLibrary = async (book: Book) => {
-    await api.addToLibrary(book.id);
-    await refresh();
+    setLibraryBooks((current) => current.some((item) => item.id === book.id) ? current : [...current, book]);
+    try {
+      await api.addToLibrary(book.id);
+    } catch {
+      syncQueue.enqueueLibraryAdd(book.id);
+    }
   };
 
   const addBooksToLibrary = async (books: Book[]) => {
     const missingBooks = new LibraryAddPlanner(libraryIds).missingBooks(books);
-    await Promise.all(missingBooks.map((book) => api.addToLibrary(book.id)));
-    await refresh();
+    await Promise.all(missingBooks.map((book) => addToLibrary(book)));
   };
 
   const removeFromLibrary = async (book: Book) => {
-    await api.removeFromLibrary(book.id);
-    await refresh();
+    setLibraryBooks((current) => current.filter((item) => item.id !== book.id));
+    try {
+      await api.removeFromLibrary(book.id);
+    } catch {
+      syncQueue.enqueueLibraryRemove(book.id);
+    }
   };
 
   const removeBooksFromLibrary = async (books: Book[]) => {
     const removableBooks = new LibraryRemovePlanner().removableBooks(books);
-    await Promise.all(removableBooks.map((book) => api.removeFromLibrary(book.id)));
-    await refresh();
+    await Promise.all(removableBooks.map((book) => removeFromLibrary(book)));
   };
 
   const moveToShelf = async (book: Book, shelf: Shelf) => {
     if (isManagedShelf(shelf)) return;
-    await api.addBookToShelf(shelf.id, book.id);
-    await refresh();
+    if (selectedShelf?.id === shelf.id) {
+      setSelectedShelfBooks((current) => current.some((item) => item.id === book.id) ? current : [...current, book]);
+    }
+    try {
+      await api.addBookToShelf(shelf.id, book.id);
+    } catch {
+      syncQueue.enqueueShelfAdd(shelf.id, book.id);
+    }
   };
 
   const removeFromShelf = async (book: Book, shelf: Shelf) => {
     if (isManagedShelf(shelf)) return;
-    await api.removeBookFromShelf(shelf.id, book.id);
+    setSelectedShelfBooks((current) => current.filter((item) => item.id !== book.id));
+    try {
+      await api.removeBookFromShelf(shelf.id, book.id);
+    } catch {
+      syncQueue.enqueueShelfRemove(shelf.id, book.id);
+    }
     if (selectedShelf?.id === shelf.id) {
       setSelectedShelfBooks((current) => current.filter((item) => item.id !== book.id));
     }
@@ -453,7 +492,9 @@ export function App() {
 
   const openShelf = async (shelf: Shelf) => {
     setSelectedShelf(shelf);
-    setSelectedShelfBooks(await api.shelfBooks(shelf.id));
+    setSelectedShelfBooks(isManagedShelf(shelf)
+      ? booksForShelf(shelf, libraryBooks, Object.values(playbackProgressByBookId))
+      : await api.shelfBooks(shelf.id));
   };
 
   const selectBook = (book: Book, source: Space) => {
@@ -507,7 +548,7 @@ export function App() {
     setPlayback({ book, mode, requestId: Date.now(), startSeconds });
   };
 
-  const updatePlaybackProgress = (bookId: string, positionSeconds: number, durationSeconds?: number) => {
+  const updatePlaybackProgressState = (bookId: string, positionSeconds: number, durationSeconds?: number) => {
     setPlaybackProgressByBookId((current) => ({
       ...current,
       [bookId]: {
@@ -519,6 +560,11 @@ export function App() {
         updatedAt: new Date().toISOString()
       }
     }));
+  };
+
+  const updatePlaybackProgress = (bookId: string, positionSeconds: number, durationSeconds?: number) => {
+    updatePlaybackProgressState(bookId, positionSeconds, durationSeconds);
+    void saveProgress(bookId, positionSeconds, durationSeconds);
   };
 
   const markBookFinished = async (book: Book) => {
@@ -539,6 +585,7 @@ export function App() {
   };
 
   const saveProgress = async (bookId: string, positionSeconds: number, durationSeconds?: number) => {
+    updatePlaybackProgressState(bookId, positionSeconds, durationSeconds);
     try {
       await api.saveProgress(bookId, positionSeconds, durationSeconds);
     } catch {
@@ -550,7 +597,9 @@ export function App() {
     setSavingOfflineBookIds((current) => new Set(current).add(book.id));
     setOfflineProgressByBookId((current) => ({ ...current, [book.id]: 0 }));
     try {
+      const manifest = await api.downloadManifest(book.id);
       await offlineCache.save(book, {
+        manifest,
         onProgress: (progress) => {
           setOfflineProgressByBookId((current) => ({ ...current, [book.id]: progress.percent }));
         }
@@ -597,6 +646,15 @@ export function App() {
       next.delete(book.id);
       return next;
     });
+  };
+
+  const repairOffline = async (book: Book) => {
+    if (await offlineCache.verify(book)) {
+      window.alert("This download is healthy.");
+      return;
+    }
+    await removeOffline(book);
+    await saveOffline(book);
   };
 
   const offlineStateFor = (book: Book): OfflineState => {
@@ -1310,6 +1368,7 @@ export function App() {
                       key={shelf.id}
                       shelf={shelf}
                       books={libraryBooks}
+                      progress={playbackProgressByBookId}
                       api={api}
                       onOpen={() => void openShelf(shelf)}
                       onDelete={() => void deleteShelf(shelf)}
@@ -1327,6 +1386,7 @@ export function App() {
             onPlay={(book) => startPlayback(book, "play")}
             playbackProgressFor={playbackProgressFor}
             onRemove={(book) => void removeOffline(book)}
+            onRepair={(book) => void repairOffline(book)}
             onSelect={(book) => selectBook(book, "library")}
           />
         ) : space === "library" && view === "home" ? (
@@ -2748,6 +2808,7 @@ function DownloadsBrowser({
   onMarkFinished,
   onPlay,
   onRemove,
+  onRepair,
   onSelect,
   playbackProgressFor
 }: {
@@ -2756,6 +2817,7 @@ function DownloadsBrowser({
   onMarkFinished: (book: Book) => Promise<void>;
   onPlay: (book: Book) => void;
   onRemove: (book: Book) => void;
+  onRepair: (book: Book) => void;
   onSelect: (book: Book) => void;
   playbackProgressFor?: (book: Book) => number | undefined;
 }) {
@@ -2775,6 +2837,7 @@ function DownloadsBrowser({
             onClearProgress={() => void onClearProgress(book)}
             onMarkFinished={() => void onMarkFinished(book)}
             onOfflineRemove={() => onRemove(book)}
+            onOfflineRepair={() => onRepair(book)}
             onPlay={() => onPlay(book)}
             onSelect={() => onSelect(book)}
             playbackProgressPercent={playbackProgressFor?.(book)}
@@ -2868,13 +2931,18 @@ function ShelfBookBrowser({
   );
 }
 
-function ShelfRow({ shelf, books, api, onOpen, onDelete }: { shelf: Shelf; books: Book[]; api: ApiClient; onOpen: () => void; onDelete: () => void }) {
+function ShelfRow({ shelf, books, progress, api, onOpen, onDelete }: { shelf: Shelf; books: Book[]; progress: Record<string, PlaybackProgress>; api: ApiClient; onOpen: () => void; onDelete: () => void }) {
   const [bookId, setBookId] = useState("");
   const [count, setCount] = useState(0);
 
   useEffect(() => {
+    if (isManagedShelf(shelf)) {
+      const desiredStatus = shelf.name.trim().toLowerCase() === "finished books" ? "finished" : "in_progress";
+      setCount(books.filter((book) => progress[book.id]?.status === desiredStatus).length);
+      return;
+    }
     void api.shelfBooks(shelf.id).then((items) => setCount(items.length));
-  }, [api, shelf.id]);
+  }, [api, books, progress, shelf]);
 
   const add = async (event: FormEvent) => {
     event.preventDefault();

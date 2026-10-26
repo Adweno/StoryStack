@@ -26,6 +26,17 @@ export interface BookAudioTrack {
   durationSeconds?: number;
 }
 
+export interface DownloadManifest {
+  bookId: string;
+  tracks: DownloadManifestTrack[];
+}
+
+export interface DownloadManifestTrack {
+  url: string;
+  bytes: number;
+  sha256: string;
+}
+
 export interface BookChapter {
   id: string;
   title: string;

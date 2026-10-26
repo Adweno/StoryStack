@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:story_stack_mobile/main.dart';
@@ -42,6 +43,21 @@ void main() {
     expect(groups, hasLength(1));
     expect(groups.first.name, 'Series');
     expect(groups.first.books.map((book) => book.id), ['1', '2']);
+  });
+
+  test('server addresses receive the correct default scheme', () {
+    expect(
+      normalizeServerAddress('app.example.com'),
+      'https://app.example.com',
+    );
+    expect(
+      normalizeServerAddress('192.168.1.20:4100', defaultScheme: 'http'),
+      'http://192.168.1.20:4100',
+    );
+    expect(
+      normalizeServerAddress('https://app.example.com/'),
+      'https://app.example.com',
+    );
   });
 
   test('remote shelf list includes managed progress shelves', () async {
@@ -205,6 +221,12 @@ void main() {
     expect(summary?.timeLeft, Duration.zero);
   });
 
+  test('progress finishes only within the final three minutes', () {
+    expect(shouldMarkProgressFinished(420, 600), isFalse);
+    expect(shouldMarkProgressFinished(421, 600), isTrue);
+    expect(shouldMarkProgressFinished(0, null), isFalse);
+  });
+
   test(
     'playback checkpoint round-trips and is cleared after recovery',
     () async {
@@ -235,6 +257,27 @@ void main() {
     expect(PlaybackCheckpoint.fromJson('not-json'), isNull);
   });
 
+  test('phone-call interruptions pause without auto-resuming', () {
+    expect(
+      shouldPauseForAudioInterruption(
+        AudioInterruptionEvent(true, AudioInterruptionType.pause),
+      ),
+      isTrue,
+    );
+    expect(
+      shouldPauseForAudioInterruption(
+        AudioInterruptionEvent(false, AudioInterruptionType.pause),
+      ),
+      isFalse,
+    );
+    expect(
+      shouldPauseForAudioInterruption(
+        AudioInterruptionEvent(true, AudioInterruptionType.duck),
+      ),
+      isFalse,
+    );
+  });
+
   test('download cleanup matches only the requested book artifacts', () {
     expect(isDownloadArtifactForBook('book.audio', 'book'), isTrue);
     expect(isDownloadArtifactForBook('book.audio.part', 'book'), isTrue);
@@ -258,6 +301,54 @@ void main() {
     expect((progress as Map<String, dynamic>)['positionSeconds'], 50);
   });
 
+  test('pending finished progress wins over a stale server snapshot', () async {
+    SharedPreferences.setMockInitialValues({});
+    final queue = OfflineSyncQueue('test-finished-recovery');
+    await queue.enqueueProgress('book-1', 600, 600);
+
+    final pending = await queue.pendingProgress();
+
+    expect(pending['book-1']?.status, ProgressStatus.finished);
+    expect(pending['book-1']?.positionSeconds, 600);
+  });
+
+  test('cached finished progress survives queue persistence', () async {
+    SharedPreferences.setMockInitialValues({});
+    final queue = OfflineSyncQueue('test-finished-cache');
+    await queue.enqueueProgress('book-1', 600, 600);
+
+    final cached = await queue.cachedProgress();
+
+    expect(cached['book-1']?.status, ProgressStatus.finished);
+    expect(cached['book-1']?.positionSeconds, 600);
+  });
+
+  test('progress reconciliation chooses the newest timestamp', () {
+    final server = PlaybackProgress(
+      userId: 'u',
+      bookId: 'book-1',
+      positionSeconds: 120,
+      durationSeconds: 600,
+      status: ProgressStatus.inProgress,
+      updatedAt: '2026-10-26T10:00:00Z',
+    );
+    final local = PlaybackProgress(
+      userId: 'u',
+      bookId: 'book-1',
+      positionSeconds: 600,
+      durationSeconds: 600,
+      status: ProgressStatus.finished,
+      updatedAt: '2026-10-26T10:00:01Z',
+    );
+
+    final merged = mergeProgressByLatest([
+      {'book-1': server},
+      {'book-1': local},
+    ]);
+
+    expect(merged['book-1']?.status, ProgressStatus.finished);
+  });
+
   test('offline sync queue preserves bookmark actions', () async {
     SharedPreferences.setMockInitialValues({});
     final queue = OfflineSyncQueue('test-bookmarks');
@@ -272,6 +363,27 @@ void main() {
     expect(queued, hasLength(1));
     expect(queued.single.id, bookmark.id);
     expect(queued.single.positionSeconds, 42);
+  });
+
+  test('offline sync queue coalesces library and shelf changes', () async {
+    SharedPreferences.setMockInitialValues({});
+    final queue = OfflineSyncQueue('test-library-actions');
+
+    await queue.enqueueLibraryChange('book-1', added: true);
+    await queue.enqueueLibraryChange('book-1', added: false);
+    await queue.enqueueShelfChange('shelf-1', 'book-1', added: true);
+    await queue.enqueueShelfChange('shelf-1', 'book-1', added: false);
+
+    final prefs = await SharedPreferences.getInstance();
+    final data =
+        jsonDecode(prefs.getString('offlineSyncQueue_test-library-actions')!)
+            as Map<String, dynamic>;
+
+    expect((data['library'] as Map<String, dynamic>)['book-1'], isFalse);
+    final shelfChange =
+        (data['shelves'] as Map<String, dynamic>)['shelf-1:book-1']
+            as Map<String, dynamic>;
+    expect(shelfChange['added'], isFalse);
   });
 }
 

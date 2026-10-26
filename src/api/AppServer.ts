@@ -1,7 +1,8 @@
 import express, { type Request, type Response } from "express";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { z } from "zod";
 import type { Book, User } from "../domain/types";
 import { BookCatalog } from "../domain/BookCatalog";
@@ -84,6 +85,16 @@ const castMediaTokenSchema = z.object({ bookId: z.string().min(1) });
 const CAST_TOKEN_TTL_MS = 10 * 60 * 1000;
 const LOGIN_LIMIT = 10;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+
+async function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk: Buffer) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
 
 export class AppServer {
   readonly app = express();
@@ -223,6 +234,42 @@ export class AppServer {
         return response.status(404).json({ error: "Book was not found." });
       }
       response.json({ book });
+    });
+
+    this.app.get("/api/books/:bookId/download-manifest", async (request, response) => {
+      const user = this.requireUser(request, response);
+      if (!user) return;
+      const book = await this.context.database.getBook(request.params.bookId);
+      if (!book || book.hidden) {
+        return response.status(404).json({ error: "Book was not found." });
+      }
+      if (!this.context.database.isBookInUserLibrary(user.id, book.id)) {
+        return response.status(403).json({ error: "Add this book to your library first." });
+      }
+
+      const tracks = book.audioTracks?.length
+        ? book.audioTracks.map((track, index) => ({
+            path: track.path,
+            url: `/media/books/${encodeURIComponent(book.id)}/audio/${index}`
+          }))
+        : book.audioPath
+        ? [{ path: book.audioPath, url: `/media/books/${encodeURIComponent(book.id)}/audio` }]
+        : [];
+      if (!tracks.length || tracks.some((track) => !existsSync(track.path))) {
+        return response.status(404).json({ error: "Audio is not available on the server." });
+      }
+
+      const manifestTracks = await Promise.all(
+        tracks.map(async (track) => {
+          const stats = await stat(track.path);
+          return {
+            url: track.url,
+            bytes: stats.size,
+            sha256: await sha256File(track.path)
+          };
+        })
+      );
+      response.json({ bookId: book.id, tracks: manifestTracks });
     });
 
     this.app.patch("/api/books/:bookId/metadata", async (request, response) => {

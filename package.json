@@ -44,6 +44,7 @@
     }
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "@vitejs/plugin-react": "^6.0.5",
     "express": "^5.2.1",
     "lucide-react": "^1.28.0",

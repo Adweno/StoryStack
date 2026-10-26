@@ -16,6 +16,7 @@ export function BookCard({
   offlineProgress,
   offlineState = "idle",
   onOfflineRemove,
+  onOfflineRepair,
   onOfflineCancel,
   onRemove,
   onRemoveFromShelf,
@@ -35,6 +36,7 @@ export function BookCard({
   offlineProgress?: number;
   offlineState?: "idle" | "saving" | "saved";
   onOfflineRemove?: () => void;
+  onOfflineRepair?: () => void;
   onOfflineCancel?: () => void;
   onRemove?: () => void;
   onRemoveFromShelf?: () => void;
@@ -88,6 +90,11 @@ export function BookCard({
 
   const removeOffline = () => {
     onOfflineRemove?.();
+    setMenuOpen(false);
+  };
+
+  const repairOffline = () => {
+    onOfflineRepair?.();
     setMenuOpen(false);
   };
 
@@ -206,6 +213,7 @@ export function BookCard({
                     markFinished={variant === "library" ? markFinished : undefined}
                     moveToShelf={moveToShelf}
                     removeOffline={onOfflineRemove ? removeOffline : undefined}
+                    repairOffline={onOfflineRepair ? repairOffline : undefined}
                     cancelOffline={onOfflineCancel ? cancelOffline : undefined}
                     position={menuPosition}
                     remove={onRemove ? remove : undefined}
@@ -251,6 +259,7 @@ function BookMenuPanel({
   moveToShelf,
   position,
   removeOffline,
+  repairOffline,
   cancelOffline,
   remove,
   removeFromShelf,
@@ -262,6 +271,7 @@ function BookMenuPanel({
   moveToShelf: (shelf: Shelf) => void;
   position: MenuPosition;
   removeOffline?: () => void;
+  repairOffline?: () => void;
   cancelOffline?: () => void;
   remove?: () => void;
   removeFromShelf?: () => void;
@@ -296,6 +306,12 @@ function BookMenuPanel({
         <button onClick={removeOffline}>
           <Download size={15} />
           Remove from Local Storage
+        </button>
+      )}
+      {repairOffline && (
+        <button onClick={repairOffline}>
+          <RotateCcw size={15} />
+          Verify and repair download
         </button>
       )}
       {cancelOffline && (

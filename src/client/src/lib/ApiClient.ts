@@ -3,6 +3,7 @@ import type {
   BookReview,
   BookBookmark,
   CatalogSettings,
+  DownloadManifest,
   MetadataEnrichmentResult,
   BookMetadataLookupResult,
   PlaybackProgress,
@@ -52,6 +53,10 @@ export class ApiClient {
 
   async createCastMediaToken(bookId: string): Promise<{ audioUrl: string; trackUrls: string[]; expiresAt: string }> {
     return this.post(`/api/cast/media-token`, { bookId });
+  }
+
+  async downloadManifest(bookId: string): Promise<DownloadManifest> {
+    return this.get(`/api/books/${encodeURIComponent(bookId)}/download-manifest`);
   }
 
   async bookReviews(bookId: string): Promise<BookReviewResponse> {

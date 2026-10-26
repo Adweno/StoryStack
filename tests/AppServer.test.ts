@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import request from "supertest";
@@ -47,6 +48,18 @@ describe("AppServer", () => {
 
     const audio = await request(app).get(`/media/books/${book.id}/audio`).set("Cookie", cookie).expect(200);
     expect(audio.body.toString()).toBe("audio-placeholder");
+
+    const manifest = await request(app)
+      .get(`/api/books/${book.id}/download-manifest`)
+      .set("Cookie", cookie)
+      .expect(200);
+    expect(manifest.body).toMatchObject({
+      bookId: book.id,
+      tracks: [{
+        bytes: Buffer.byteLength("audio-placeholder"),
+        sha256: createHash("sha256").update("audio-placeholder").digest("hex")
+      }]
+    });
   });
 
   it("creates and accepts a Story Stack invite", async () => {

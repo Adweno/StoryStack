@@ -1,7 +1,9 @@
-import type { Book } from "../types";
+import { sha256 } from "@noble/hashes/sha256";
+import type { Book, DownloadManifest, DownloadManifestTrack } from "../types";
 
 const CACHE_NAME = "story-stack-offline-books-v1";
 const BOOK_METADATA_KEY = "story-stack-offline-book-metadata-v1";
+const VERIFIED_MANIFEST_KEY = "story-stack-offline-manifests-v1";
 const MAX_DOWNLOAD_ATTEMPTS = 3;
 
 export class OfflineBookCache {
@@ -13,26 +15,32 @@ export class OfflineBookCache {
 
   async save(book: Book, options: OfflineBookSaveOptions = {}): Promise<void> {
     this.assertSupported();
+    const manifest = options.manifest;
+    if (!manifest || manifest.bookId !== book.id || manifest.tracks.length === 0) {
+      throw new Error("A verified download manifest is required.");
+    }
     const controller = new AbortController();
     this.activeDownloads.set(book.id, controller);
     const cache = await caches.open(CACHE_NAME);
     try {
       options.onProgress?.({ percent: 0, receivedBytes: 0 });
-      const audioUrls = this.audioUrls(book);
-      for (let index = 0; index < audioUrls.length; index += 1) {
-        await this.cacheUrl(cache, audioUrls[index], (progress) => {
+      for (let index = 0; index < manifest.tracks.length; index += 1) {
+        const track = manifest.tracks[index];
+        await this.cacheUrl(cache, track.url, track, (progress) => {
           options.onProgress?.({
             ...progress,
-            percent: progress.percent === undefined ? undefined : Math.min(99, Math.round(((index + progress.percent / 100) / audioUrls.length) * 100))
+            percent: progress.percent === undefined ? undefined : Math.min(99, Math.round(((index + progress.percent / 100) / manifest.tracks.length) * 100))
           });
         }, controller.signal);
       }
-      if (book.coverPath) await this.cacheUrl(cache, this.coverUrl(book.id), undefined, controller.signal);
+      if (book.coverPath) await this.cacheUrl(cache, this.coverUrl(book.id), undefined, undefined, controller.signal);
       options.onProgress?.({ percent: 100 });
       this.saveBookMetadata(book);
+      this.saveManifest(manifest);
     } catch (error) {
       await Promise.all([...new Set([...this.audioUrls(book), this.coverUrl(book.id)])].map((url) => cache.delete(url)));
       this.removeBookMetadata(book.id);
+      this.removeManifest(book.id);
       throw error;
     } finally {
       this.activeDownloads.delete(book.id);
@@ -47,8 +55,24 @@ export class OfflineBookCache {
     if (!this.isSupported()) {
       return false;
     }
+    const manifest = this.readManifest(bookId);
+    if (!manifest) return false;
     const cache = await caches.open(CACHE_NAME);
-    return Boolean(await cache.match(this.audioUrl(bookId)) ?? (await cache.match(this.audioTrackUrl(bookId, 0))));
+    return (await Promise.all(manifest.tracks.map((track) => cache.match(track.url)))).every(Boolean);
+  }
+
+  async verify(book: Book): Promise<boolean> {
+    if (!this.isSupported()) return false;
+    const manifest = this.readManifest(book.id);
+    if (!manifest) return false;
+    const cache = await caches.open(CACHE_NAME);
+    for (const track of manifest.tracks) {
+      const response = await cache.match(track.url);
+      if (!response) return false;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength !== track.bytes || toSha256(bytes) !== track.sha256) return false;
+    }
+    return !book.coverPath || Boolean(await cache.match(this.coverUrl(book.id)));
   }
 
   async listBookIds(): Promise<string[]> {
@@ -67,8 +91,9 @@ export class OfflineBookCache {
     if (!this.isSupported()) {
       return [];
     }
-    const cachedIds = new Set(await this.listBookIds());
-    return this.readBookMetadata().filter((book) => cachedIds.has(book.id));
+    const books = this.readBookMetadata();
+    const verified = await Promise.all(books.map(async (book) => [book, await this.has(book.id)] as const));
+    return verified.filter(([, isVerified]) => isVerified).map(([book]) => book);
   }
 
   async remove(book: Book): Promise<void> {
@@ -78,6 +103,7 @@ export class OfflineBookCache {
     const cache = await caches.open(CACHE_NAME);
     await Promise.all([...new Set([...this.audioUrls(book), this.audioUrl(book.id), this.coverUrl(book.id)])].map((url) => cache.delete(url)));
     this.removeBookMetadata(book.id);
+    this.removeManifest(book.id);
   }
 
   async audioSources(book: Book, options: { sample?: boolean } = {}): Promise<CachedAudioSource[]> {
@@ -102,7 +128,7 @@ export class OfflineBookCache {
     return sources[0];
   }
 
-  private async cacheUrl(cache: Cache, url: string, onProgress?: (progress: DownloadProgress) => void, signal?: AbortSignal): Promise<void> {
+  private async cacheUrl(cache: Cache, url: string, expected: DownloadManifestTrack | undefined, onProgress?: (progress: DownloadProgress) => void, signal?: AbortSignal): Promise<void> {
     for (let attempt = 0; attempt < MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
       try {
         const response = await fetch(url, { signal });
@@ -110,7 +136,20 @@ export class OfflineBookCache {
           throw new Error("Download failed.");
         }
         const trackingResponse = response.clone();
-        await Promise.all([cache.put(url, response), this.trackDownloadProgress(trackingResponse, onProgress)]);
+        const [bytes] = await Promise.all([
+          response.arrayBuffer(),
+          this.trackDownloadProgress(trackingResponse, onProgress)
+        ]);
+        if (expected) {
+          if (bytes.byteLength !== expected.bytes) {
+            throw new Error("Downloaded audio size did not match the server manifest.");
+          }
+          const actualHash = toSha256(new Uint8Array(bytes));
+          if (actualHash !== expected.sha256) {
+            throw new Error("Downloaded audio failed integrity verification.");
+          }
+        }
+        await cache.put(url, new Response(bytes, { headers: response.headers, status: response.status, statusText: response.statusText }));
         return;
       } catch (error) {
         if (signal?.aborted || attempt === MAX_DOWNLOAD_ATTEMPTS - 1) {
@@ -173,6 +212,31 @@ export class OfflineBookCache {
     window.localStorage.setItem(BOOK_METADATA_KEY, JSON.stringify(nextBooks));
   }
 
+  private saveManifest(manifest: DownloadManifest): void {
+    const manifests = this.readManifests();
+    manifests[manifest.bookId] = manifest;
+    window.localStorage.setItem(VERIFIED_MANIFEST_KEY, JSON.stringify(manifests));
+  }
+
+  private removeManifest(bookId: string): void {
+    const manifests = this.readManifests();
+    delete manifests[bookId];
+    window.localStorage.setItem(VERIFIED_MANIFEST_KEY, JSON.stringify(manifests));
+  }
+
+  private readManifest(bookId: string): DownloadManifest | undefined {
+    return this.readManifests()[bookId];
+  }
+
+  private readManifests(): Record<string, DownloadManifest> {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(VERIFIED_MANIFEST_KEY) ?? "{}") as unknown;
+      return parsed && typeof parsed === "object" ? parsed as Record<string, DownloadManifest> : {};
+    } catch {
+      return {};
+    }
+  }
+
   private removeBookMetadata(bookId: string): void {
     const books = this.readBookMetadata().filter((book) => book.id !== bookId);
     window.localStorage.setItem(BOOK_METADATA_KEY, JSON.stringify(books));
@@ -186,6 +250,10 @@ export class OfflineBookCache {
       return [];
     }
   }
+}
+
+function toSha256(bytes: Uint8Array): string {
+  return [...sha256(bytes)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function isBookMetadata(value: unknown): value is Book {
@@ -208,5 +276,6 @@ export interface DownloadProgress {
 }
 
 export interface OfflineBookSaveOptions {
+  manifest?: DownloadManifest;
   onProgress?: (progress: DownloadProgress) => void;
 }

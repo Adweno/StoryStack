@@ -4,6 +4,7 @@ import { IdFactory } from "../domain/IdFactory";
 
 const DEFAULT_SHELF_NAME = "Favorites";
 const MANAGED_SHELF_NAMES = new Set(["finished books", "books in progress"]);
+const FINISH_REMAINING_SECONDS = 3 * 60;
 
 export interface LibraryRepository {
   getBook(bookId: string): Promise<Book | undefined>;
@@ -145,7 +146,11 @@ export class LibraryService {
   }
 
   private getListeningStatus(positionSeconds: number, durationSeconds?: number): PlaybackProgress["status"] {
-    if (durationSeconds && durationSeconds > 0 && positionSeconds >= durationSeconds) {
+    if (
+      durationSeconds &&
+      durationSeconds > 0 &&
+      durationSeconds - positionSeconds < FINISH_REMAINING_SECONDS
+    ) {
       return "finished";
     }
     return positionSeconds > 0 ? "in_progress" : "not_started";

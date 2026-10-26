@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chrome_cast/flutter_chrome_cast.dart';
 import 'package:flutter/services.dart';
@@ -45,21 +46,29 @@ MediaItem _mediaItemFor(Book book, {int? trackIndex}) => MediaItem(
   extras: {'bookId': book.id, 'trackIndex': trackIndex},
 );
 
+bool shouldPauseForAudioInterruption(AudioInterruptionEvent event) =>
+    event.begin &&
+    (event.type == AudioInterruptionType.pause ||
+        event.type == AudioInterruptionType.unknown);
+
 class PlaybackCheckpoint {
   const PlaybackCheckpoint({
     required this.positionSeconds,
     required this.durationSeconds,
     required this.finished,
+    this.updatedAt,
   });
 
   final double positionSeconds;
   final double durationSeconds;
   final bool finished;
+  final String? updatedAt;
 
   Map<String, dynamic> toJson() => {
     'positionSeconds': positionSeconds,
     'durationSeconds': durationSeconds,
     'finished': finished,
+    'updatedAt': updatedAt,
   };
 
   static PlaybackCheckpoint? fromJson(String? raw) {
@@ -78,6 +87,7 @@ class PlaybackCheckpoint {
         positionSeconds: position,
         durationSeconds: duration,
         finished: data['finished'] == true,
+        updatedAt: data['updatedAt'] as String?,
       );
     } catch (_) {
       return null;
@@ -114,6 +124,7 @@ const _finishedShelfName = 'Finished Books';
 const _inProgressShelfName = 'Books in Progress';
 const _guestLocalDeviceUserId = 'local-device';
 const _compactControlSize = 38.0;
+const audiobookFinishRemainingSeconds = 3 * 60;
 const _audioExtensions = {
   '.aac',
   '.aa',
@@ -136,6 +147,60 @@ const _audioExtensions = {
 };
 const _coverExtensions = {'.jpg', '.jpeg', '.png', '.webp'};
 const _metadataFileNames = {'metadata.json', 'book.json', 'desc.json'};
+
+String normalizeServerAddress(String value, {String defaultScheme = 'https'}) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return '';
+  final withScheme =
+      RegExp(r'^[a-z][a-z0-9+.-]*://', caseSensitive: false).hasMatch(trimmed)
+      ? trimmed
+      : '$defaultScheme://$trimmed';
+  final parsed = Uri.tryParse(withScheme);
+  if (parsed == null || parsed.host.isEmpty) {
+    throw const FormatException(
+      'Enter a valid server address, such as https://example.com.',
+    );
+  }
+  return withScheme.endsWith('/')
+      ? withScheme.substring(0, withScheme.length - 1)
+      : withScheme;
+}
+
+bool shouldMarkProgressFinished(num positionSeconds, num? durationSeconds) {
+  if (durationSeconds == null || durationSeconds <= 0) return false;
+  return durationSeconds - positionSeconds < audiobookFinishRemainingSeconds;
+}
+
+Map<String, PlaybackProgress> mergeProgressByLatest(
+  Iterable<Map<String, PlaybackProgress>> sources,
+) {
+  final merged = <String, PlaybackProgress>{};
+  for (final source in sources) {
+    for (final entry in source.entries) {
+      final current = merged[entry.key];
+      if (current == null || _isProgressAtLeastAsRecent(entry.value, current)) {
+        merged[entry.key] = entry.value;
+      }
+    }
+  }
+  return merged;
+}
+
+bool _isProgressAtLeastAsRecent(
+  PlaybackProgress candidate,
+  PlaybackProgress current,
+) {
+  final candidateTime = candidate.updatedAt == null
+      ? null
+      : DateTime.tryParse(candidate.updatedAt!);
+  final currentTime = current.updatedAt == null
+      ? null
+      : DateTime.tryParse(current.updatedAt!);
+  // Legacy local records have no timestamp. Treat the later source as the
+  // newer command so they remain recoverable during migration.
+  if (candidateTime == null || currentTime == null) return true;
+  return !candidateTime.isBefore(currentTime);
+}
 
 Future<List<Shelf>> ensureDefaultShelf(
   StoryStackApi api,
@@ -473,23 +538,31 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _saveSourceAddress(LibrarySourceMode mode) async {
+    final normalizedAddress = normalizeServerAddress(
+      mode == LibrarySourceMode.remoteAccess
+          ? remoteAccessController.text
+          : localNetworkController.text,
+      defaultScheme: mode == LibrarySourceMode.remoteAccess ? 'https' : 'http',
+    );
     if (mode == LibrarySourceMode.remoteAccess) {
       await widget.sourceStore.saveSourceAddress(
         LibrarySourceMode.remoteAccess,
-        remoteAccessController.text.trim(),
+        normalizedAddress,
       );
       await widget.sourceStore.saveSourceAddress(
         LibrarySourceMode.localNetwork,
-        localNetworkController.text.trim(),
+        normalizeServerAddress(
+          localNetworkController.text,
+          defaultScheme: 'http',
+        ),
       );
-      await widget.api.setServerUrl(remoteAccessController.text.trim());
+      remoteAccessController.text = normalizedAddress;
+      await widget.api.setServerUrl(normalizedAddress);
       return;
     }
-    await widget.sourceStore.saveSourceAddress(
-      mode,
-      localNetworkController.text.trim(),
-    );
-    await widget.api.setServerUrl(localNetworkController.text.trim());
+    await widget.sourceStore.saveSourceAddress(mode, normalizedAddress);
+    localNetworkController.text = normalizedAddress;
+    await widget.api.setServerUrl(normalizedAddress);
   }
 
   Future<void> _login() async {
@@ -815,7 +888,9 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
 
   final pageController = ScrollController();
   final searchController = TextEditingController();
-  final player = AudioPlayer();
+  final player = AudioPlayer(handleInterruptions: false);
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
+  StreamSubscription<void>? _becomingNoisySubscription;
   late final CastManager castManager;
   late final OfflineSyncQueue syncQueue;
   final downloads = OfflineBookStore();
@@ -844,6 +919,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   BookGroup? activeGroup;
   Book? featuredStoreBook;
   Map<String, PlaybackProgress> progressByBook = {};
+  final manuallyFinishedBookIds = <String>{};
   Map<String, double?> downloadProgress = {};
   Set<String> downloadedBookIds = {};
   List<BookBookmark> playingBookmarks = [];
@@ -867,6 +943,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_configureAudioSession());
     castManager = CastManager(widget.api, downloads);
     syncQueue = OfflineSyncQueue(widget.user.id);
     castManager.addListener(() {
@@ -932,12 +1009,34 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   void dispose() {
     progressTimer?.cancel();
     unawaited(_saveProgress());
+    unawaited(_interruptionSubscription?.cancel());
+    unawaited(_becomingNoisySubscription?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     pageController.dispose();
     searchController.dispose();
     player.dispose();
     castManager.dispose();
     super.dispose();
+  }
+
+  Future<void> _configureAudioSession() async {
+    final session = await AudioSession.instance;
+    // Notifications and navigation prompts may request a brief duck. Keep the
+    // audiobook playing for those short interruptions; Android still reports
+    // phone calls and other transient focus losses as pause interruptions.
+    await session.configure(
+      const AudioSessionConfiguration.speech().copyWith(
+        androidWillPauseWhenDucked: false,
+      ),
+    );
+    _interruptionSubscription = session.interruptionEventStream.listen((event) {
+      if (shouldPauseForAudioInterruption(event) && player.playing) {
+        unawaited(player.pause());
+      }
+    });
+    _becomingNoisySubscription = session.becomingNoisyEventStream.listen((_) {
+      if (player.playing) unawaited(player.pause());
+    });
   }
 
   @override
@@ -1040,6 +1139,12 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         });
         return;
       }
+      // Capture queued writes before starting the flush. A successful flush
+      // removes an item from the queue, while the library request below can
+      // still be racing with the server write. Keeping this snapshot lets a
+      // just-finished book remain authoritative for this startup even if the
+      // library response was produced from the older server state.
+      final pendingProgressBeforeSync = await syncQueue.pendingProgress();
       // Syncing offline mutations and preparing secondary indexes should not
       // block the first useful paint. The catalog is enough to make the app
       // interactive; the rest is hydrated after it is visible.
@@ -1073,6 +1178,10 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         books: library.books,
         localDevice: false,
       );
+      final progressWithPendingWrites = await _mergePendingProgress(
+        currentProgress,
+        preservedPending: pendingProgressBeforeSync,
+      );
       setStateSafe(() {
         librarySourceMode = localSource;
         remoteAccessAddress = sourceAddresses.remoteAccessAddress;
@@ -1084,7 +1193,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
             !sortedStore.any((book) => book.id == featuredStoreBook!.id)) {
           featuredStoreBook = _randomStoreBook(sortedStore);
         }
-        progressByBook = currentProgress;
+        progressByBook = progressWithPendingWrites;
         loading = false;
       });
       unawaited(
@@ -1117,14 +1226,17 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         books: library.books,
         localDevice: false,
       );
-      await _publishAndroidAutoProgress(mergedProgress);
+      final progressWithPendingWrites = await _mergePendingProgress(
+        mergedProgress,
+      );
+      await _publishAndroidAutoProgress(progressWithPendingWrites);
       final nextShelfBookCounts = await _loadShelfBookCounts(
         userShelves,
         books: library.books,
-        progress: mergedProgress,
+        progress: progressWithPendingWrites,
       );
       setStateSafe(() {
-        progressByBook = mergedProgress;
+        progressByBook = progressWithPendingWrites;
         shelves = userShelves;
         shelfBookCounts = nextShelfBookCounts;
       });
@@ -1178,6 +1290,18 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
     return merged;
   }
 
+  Future<Map<String, PlaybackProgress>> _mergePendingProgress(
+    Map<String, PlaybackProgress> progress, {
+    Map<String, PlaybackProgress> preservedPending = const {},
+  }) async {
+    return mergeProgressByLatest([
+      progress,
+      await syncQueue.cachedProgress(),
+      preservedPending,
+      await syncQueue.pendingProgress(),
+    ]);
+  }
+
   Future<Map<String, PlaybackProgress>> _recoverPlaybackCheckpoints(
     Map<String, PlaybackProgress> progress, {
     required Iterable<Book> books,
@@ -1190,23 +1314,46 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
     for (final bookId in checkpoints.bookIds.toList()) {
       final checkpoint = checkpoints.read(bookId);
       if (checkpoint == null || !booksById.containsKey(bookId)) continue;
-      try {
-        final saved = localDevice
-            ? await localDeviceLibrary.saveProgress(
-                bookId,
-                checkpoint.positionSeconds,
-                checkpoint.durationSeconds,
-              )
-            : await widget.api.saveProgress(
-                bookId,
-                checkpoint.positionSeconds,
-                checkpoint.durationSeconds,
-              );
-        merged[bookId] = saved;
+      final checkpointProgress = PlaybackProgress(
+        userId: widget.user.id,
+        bookId: bookId,
+        positionSeconds: checkpoint.positionSeconds,
+        durationSeconds: checkpoint.durationSeconds,
+        status: checkpoint.finished
+            ? ProgressStatus.finished
+            : checkpoint.positionSeconds > 0
+            ? ProgressStatus.inProgress
+            : ProgressStatus.notStarted,
+        updatedAt: checkpoint.updatedAt,
+      );
+      final existing = merged[bookId];
+      if (existing != null &&
+          _isProgressAtLeastAsRecent(existing, checkpointProgress)) {
         await checkpoints.clear(bookId);
-      } catch (_) {
-        // Keep the checkpoint for the next launch when the server is offline.
+        continue;
       }
+      if (localDevice) {
+        try {
+          merged[bookId] = await localDeviceLibrary.saveProgress(
+            bookId,
+            checkpoint.positionSeconds,
+            checkpoint.durationSeconds,
+          );
+          await checkpoints.clear(bookId);
+        } catch (_) {
+          // Keep the checkpoint for the next launch if local persistence fails.
+        }
+        continue;
+      }
+
+      merged[bookId] = checkpointProgress;
+      await syncQueue.enqueueProgress(
+        bookId,
+        checkpoint.positionSeconds,
+        checkpoint.durationSeconds,
+        updatedAt: checkpoint.updatedAt,
+      );
+      unawaited(syncQueue.flush(widget.api));
     }
     return merged;
   }
@@ -1374,6 +1521,9 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   }
 
   Future<void> _play(Book book, {bool sample = false}) async {
+    // Starting a finished book again is an explicit request to resume it, so
+    // allow subsequent playback checkpoints to replace the finished state.
+    manuallyFinishedBookIds.remove(book.id);
     if (castManager.isCasting) {
       await castManager.stopCasting();
     }
@@ -1571,13 +1721,14 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
       final title = _chapterTitleAt(book, position);
       final bookmark = book.isLocalDevice
           ? await localDeviceLibrary.createBookmark(book.id, position, title)
-          : await _createServerBookmark(book.id, position, title);
+          : await syncQueue.enqueueBookmarkCreate(book.id, position, title);
       if (mounted) {
         setState(
           () => playingBookmarks = [...playingBookmarks, bookmark]
             ..sort((a, b) => a.positionSeconds.compareTo(b.positionSeconds)),
         );
       }
+      if (!book.isLocalDevice) unawaited(syncQueue.flush(widget.api));
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1595,11 +1746,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
     } else if (bookmark.id.startsWith('queued_bookmark_')) {
       await syncQueue.removeQueuedBookmark(book.id, bookmark.id);
     } else {
-      try {
-        await widget.api.deleteBookBookmark(book.id, bookmark.id);
-      } catch (_) {
-        await syncQueue.enqueueBookmarkDelete(book.id, bookmark.id);
-      }
+      await syncQueue.enqueueBookmarkDelete(book.id, bookmark.id);
     }
     if (mounted) {
       setState(
@@ -1608,24 +1755,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
             .toList(),
       );
     }
-  }
-
-  Future<BookBookmark> _createServerBookmark(
-    String bookId,
-    int positionSeconds,
-    String title,
-  ) async {
-    try {
-      final bookmark = await widget.api.createBookBookmark(
-        bookId,
-        positionSeconds: positionSeconds,
-        title: title,
-      );
-      await syncQueue.flush(widget.api);
-      return bookmark;
-    } catch (_) {
-      return syncQueue.enqueueBookmarkCreate(bookId, positionSeconds, title);
-    }
+    if (!book.isLocalDevice) unawaited(syncQueue.flush(widget.api));
   }
 
   String _chapterTitleAt(Book book, int seconds) {
@@ -1737,7 +1867,12 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   Future<void> _saveProgress({bool forceFinished = false}) async {
     final book = playingBook;
     if (book == null || sampleMode) return;
+    // Closing the app can save one final playback checkpoint. Never let that
+    // checkpoint undo an explicit "Mark finished" action that happened in the
+    // same session.
+    if (!forceFinished && manuallyFinishedBookIds.contains(book.id)) return;
     if (restoringPlaybackPosition && !forceFinished) return;
+    final updatedAt = DateTime.now().toUtc().toIso8601String();
     final actualDuration = _wholeDuration(book).inSeconds;
     final positionSeconds = forceFinished
         ? actualDuration.toDouble()
@@ -1750,50 +1885,43 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         positionSeconds: positionSeconds,
         durationSeconds: actualDuration.toDouble(),
         finished: forceFinished,
+        updatedAt: updatedAt,
       ),
     );
     // Keep the offline Android Auto cache current while the phone app is
     // playing. This prevents Auto from restoring an older position snapshot.
     await _publishAndroidAutoPosition(book.id, positionSeconds);
-    try {
-      if (book.isLocalDevice) {
-        final progress = await localDeviceLibrary.saveProgress(
-          book.id,
-          positionSeconds,
-          actualDuration.toDouble(),
-        );
-        _applyProgressState(progress);
-        await checkpoints.clear(book.id);
-        return;
-      }
-      final progress = await widget.api.saveProgress(
+    if (book.isLocalDevice) {
+      final progress = await localDeviceLibrary.saveProgress(
         book.id,
         positionSeconds,
         actualDuration.toDouble(),
       );
-      await syncQueue.discardProgress(book.id);
-      await syncQueue.flush(widget.api);
       _applyProgressState(progress);
       await checkpoints.clear(book.id);
-    } catch (_) {
-      final queuedProgress = PlaybackProgress(
-        userId: widget.user.id,
-        bookId: book.id,
-        positionSeconds: positionSeconds,
-        durationSeconds: actualDuration.toDouble(),
-        status: forceFinished || positionSeconds >= actualDuration
-            ? ProgressStatus.finished
-            : positionSeconds > 0
-            ? ProgressStatus.inProgress
-            : ProgressStatus.notStarted,
-      );
-      _applyProgressState(queuedProgress);
-      await syncQueue.enqueueProgress(
-        book.id,
-        positionSeconds,
-        actualDuration.toDouble(),
-      );
+      return;
     }
+    final queuedProgress = PlaybackProgress(
+      userId: widget.user.id,
+      bookId: book.id,
+      positionSeconds: positionSeconds,
+      durationSeconds: actualDuration.toDouble(),
+      status:
+          forceFinished ||
+              shouldMarkProgressFinished(positionSeconds, actualDuration)
+          ? ProgressStatus.finished
+          : positionSeconds > 0
+          ? ProgressStatus.inProgress
+          : ProgressStatus.notStarted,
+    );
+    _applyProgressState(queuedProgress);
+    await syncQueue.enqueueProgress(
+      book.id,
+      positionSeconds,
+      actualDuration.toDouble(),
+      updatedAt: updatedAt,
+    );
+    unawaited(syncQueue.flush(widget.api));
   }
 
   Future<void> _publishAndroidAutoPosition(
@@ -1811,9 +1939,13 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
   }
 
   Future<void> _markFinished(Book book) async {
+    manuallyFinishedBookIds.add(book.id);
     final durationSeconds =
         (book.durationSeconds ?? progressByBook[book.id]?.durationSeconds ?? 1)
             .toDouble();
+    final prefs = await SharedPreferences.getInstance();
+    final checkpoints = PlaybackCheckpointStore(prefs, widget.user.id);
+    await checkpoints.clear(book.id);
     if (book.isLocalDevice) {
       final progress = await localDeviceLibrary.saveProgress(
         book.id,
@@ -1824,34 +1956,33 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
       await _refreshActiveShelf();
       return;
     }
-    PlaybackProgress progress;
-    try {
-      progress = await widget.api.saveProgress(
-        book.id,
-        durationSeconds,
-        durationSeconds,
-      );
-      await syncQueue.discardProgress(book.id);
-      await syncQueue.flush(widget.api);
-    } catch (_) {
-      await syncQueue.enqueueProgress(
-        book.id,
-        durationSeconds,
-        durationSeconds,
-      );
-      progress = PlaybackProgress(
-        userId: widget.user.id,
-        bookId: book.id,
-        positionSeconds: durationSeconds,
-        durationSeconds: durationSeconds,
-        status: ProgressStatus.finished,
-      );
-    }
+    final progress = PlaybackProgress(
+      userId: widget.user.id,
+      bookId: book.id,
+      positionSeconds: durationSeconds,
+      durationSeconds: durationSeconds,
+      status: ProgressStatus.finished,
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+    );
+
+    // Persist the local command before updating the visible state. This makes
+    // the finish action survive an immediate force-close; server sync remains
+    // asynchronous after the durable local write completes.
+    await syncQueue.enqueueProgress(
+      book.id,
+      durationSeconds,
+      durationSeconds,
+      updatedAt: progress.updatedAt,
+    );
     _applyProgressState(progress);
-    await _refreshActiveShelf();
+    unawaited(_refreshActiveShelf());
+    unawaited(syncQueue.flush(widget.api));
   }
 
   Future<void> _clearProgress(Book book) async {
+    manuallyFinishedBookIds.remove(book.id);
+    final prefs = await SharedPreferences.getInstance();
+    await PlaybackCheckpointStore(prefs, widget.user.id).clear(book.id);
     if (book.isLocalDevice) {
       final progress = await localDeviceLibrary.saveProgress(
         book.id,
@@ -1866,23 +1997,17 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
     final durationSeconds =
         (book.durationSeconds ?? progressByBook[book.id]?.durationSeconds)
             ?.toDouble();
-    PlaybackProgress progress;
-    try {
-      progress = await widget.api.saveProgress(book.id, 0, durationSeconds);
-      await syncQueue.discardProgress(book.id);
-      await syncQueue.flush(widget.api);
-    } catch (_) {
-      await syncQueue.enqueueProgress(book.id, 0, durationSeconds);
-      progress = PlaybackProgress(
-        userId: widget.user.id,
-        bookId: book.id,
-        positionSeconds: 0,
-        durationSeconds: durationSeconds,
-        status: ProgressStatus.notStarted,
-      );
-    }
+    final progress = PlaybackProgress(
+      userId: widget.user.id,
+      bookId: book.id,
+      positionSeconds: 0,
+      durationSeconds: durationSeconds,
+      status: ProgressStatus.notStarted,
+    );
     _applyProgressState(progress);
-    await _refreshActiveShelf();
+    unawaited(_refreshActiveShelf());
+    await syncQueue.enqueueProgress(book.id, 0, durationSeconds);
+    unawaited(syncQueue.flush(widget.api));
   }
 
   List<Duration> _trackDurations(Book book) => book.audioTracks
@@ -1991,7 +2116,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
     if (book.isLocalDevice) {
       await localDeviceLibrary.addToLibrary(book.id);
     } else {
-      await widget.api.addToLibrary(book.id);
+      await syncQueue.enqueueLibraryChange(book.id, added: true);
     }
     final updatedBook = book.copyWith(inLibrary: true);
     setStateSafe(() {
@@ -2004,13 +2129,14 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
       if (selectedBook?.id == book.id) selectedBook = updatedBook;
       if (featuredStoreBook?.id == book.id) featuredStoreBook = updatedBook;
     });
+    if (!book.isLocalDevice) unawaited(syncQueue.flush(widget.api));
   }
 
   Future<void> _removeFromLibrary(Book book) async {
     if (book.isLocalDevice) {
       await localDeviceLibrary.removeFromLibrary(book.id);
     } else {
-      await widget.api.removeFromLibrary(book.id);
+      await syncQueue.enqueueLibraryChange(book.id, added: false);
     }
     setStateSafe(() {
       libraryBooks = libraryBooks.where((item) => item.id != book.id).toList();
@@ -2022,6 +2148,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
           .toList();
       if (selectedBook?.id == book.id) selectedBook = null;
     });
+    if (!book.isLocalDevice) unawaited(syncQueue.flush(widget.api));
   }
 
   Future<void> _changeLibrarySource(LibrarySourceMode mode) async {
@@ -2130,14 +2257,27 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         shelf.id,
         await localDeviceLibrary.loadBooks(),
       );
+      if (!mounted) return;
+      setState(() {
+        shelfBookCounts = {...shelfBookCounts, shelf.id: shelfBooks.length};
+      });
     } else {
-      await widget.api.addBookToShelf(shelf.id, book.id);
-      shelfBooks = await widget.api.shelfBooks(shelf.id);
+      await syncQueue.enqueueShelfChange(shelf.id, book.id, added: true);
+      if (!mounted) return;
+      setState(() {
+        if (activeShelf?.id == shelf.id &&
+            !activeShelfBooks.any((item) => item.id == book.id)) {
+          activeShelfBooks = sortBooks([...activeShelfBooks, book]);
+        }
+        shelfBookCounts = {
+          ...shelfBookCounts,
+          shelf.id: activeShelf?.id == shelf.id
+              ? activeShelfBooks.length
+              : (shelfBookCounts[shelf.id] ?? 0) + 1,
+        };
+      });
+      unawaited(syncQueue.flush(widget.api));
     }
-    if (!mounted) return;
-    setState(() {
-      shelfBookCounts = {...shelfBookCounts, shelf.id: shelfBooks.length};
-    });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Added ${book.title} to ${shelf.name}.')),
     );
@@ -2153,15 +2293,25 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         shelf.id,
         await localDeviceLibrary.loadBooks(),
       );
+      if (!mounted) return;
+      setState(() {
+        activeShelfBooks = sortBooks(shelfBooks);
+        shelfBookCounts = {...shelfBookCounts, shelf.id: shelfBooks.length};
+      });
     } else {
-      await widget.api.removeBookFromShelf(shelf.id, book.id);
-      shelfBooks = await widget.api.shelfBooks(shelf.id);
+      await syncQueue.enqueueShelfChange(shelf.id, book.id, added: false);
+      if (!mounted) return;
+      setState(() {
+        activeShelfBooks = activeShelfBooks
+            .where((item) => item.id != book.id)
+            .toList();
+        shelfBookCounts = {
+          ...shelfBookCounts,
+          shelf.id: activeShelfBooks.length,
+        };
+      });
+      unawaited(syncQueue.flush(widget.api));
     }
-    if (!mounted) return;
-    setState(() {
-      activeShelfBooks = sortBooks(shelfBooks);
-      shelfBookCounts = {...shelfBookCounts, shelf.id: shelfBooks.length};
-    });
   }
 
   Future<void> _logout() async {
@@ -6289,6 +6439,7 @@ class OfflineSyncQueue {
 
   final String userId;
   SharedPreferences? _prefs;
+  Future<void>? _flushFuture;
 
   String get _key => 'offlineSyncQueue_$userId';
 
@@ -6312,8 +6463,9 @@ class OfflineSyncQueue {
   Future<void> enqueueProgress(
     String bookId,
     double positionSeconds,
-    double? durationSeconds,
-  ) async {
+    double? durationSeconds, {
+    String? updatedAt,
+  }) async {
     final queue = await _read();
     final progress = Map<String, dynamic>.from(
       (queue['progress'] as Map?)?.cast<String, dynamic>() ?? {},
@@ -6322,8 +6474,14 @@ class OfflineSyncQueue {
       'bookId': bookId,
       'positionSeconds': positionSeconds,
       ...durationSeconds == null ? {} : {'durationSeconds': durationSeconds},
+      'updatedAt': updatedAt ?? DateTime.now().toUtc().toIso8601String(),
     };
     queue['progress'] = progress;
+    final cachedProgress = Map<String, dynamic>.from(
+      (queue['progressCache'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    cachedProgress[bookId] = progress[bookId];
+    queue['progressCache'] = cachedProgress;
     await _write(queue);
   }
 
@@ -6335,6 +6493,49 @@ class OfflineSyncQueue {
     progress.remove(bookId);
     queue['progress'] = progress;
     await _write(queue);
+  }
+
+  Future<Map<String, PlaybackProgress>> pendingProgress() async {
+    final queue = await _read();
+    final progress = Map<String, dynamic>.from(
+      (queue['progress'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    return _progressMapFromRaw(progress);
+  }
+
+  Future<Map<String, PlaybackProgress>> cachedProgress() async {
+    final queue = await _read();
+    final progress = Map<String, dynamic>.from(
+      (queue['progressCache'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    return _progressMapFromRaw(progress);
+  }
+
+  Map<String, PlaybackProgress> _progressMapFromRaw(
+    Map<String, dynamic> progress,
+  ) {
+    return progress.map((bookId, raw) {
+      final item = Map<String, dynamic>.from(raw as Map);
+      final positionSeconds = (item['positionSeconds'] as num).toDouble();
+      final durationSeconds = (item['durationSeconds'] as num?)?.toDouble();
+      final status =
+          shouldMarkProgressFinished(positionSeconds, durationSeconds)
+          ? ProgressStatus.finished
+          : positionSeconds > 0
+          ? ProgressStatus.inProgress
+          : ProgressStatus.notStarted;
+      return MapEntry(
+        bookId,
+        PlaybackProgress(
+          userId: userId,
+          bookId: bookId,
+          positionSeconds: positionSeconds,
+          durationSeconds: durationSeconds,
+          status: status,
+          updatedAt: item['updatedAt'] as String?,
+        ),
+      );
+    });
   }
 
   Future<BookBookmark> enqueueBookmarkCreate(
@@ -6395,7 +6596,48 @@ class OfflineSyncQueue {
     await _write(queue);
   }
 
-  Future<void> flush(StoryStackApi api) async {
+  Future<void> enqueueLibraryChange(
+    String bookId, {
+    required bool added,
+  }) async {
+    final queue = await _read();
+    final changes = Map<String, dynamic>.from(
+      (queue['library'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    changes[bookId] = added;
+    queue['library'] = changes;
+    await _write(queue);
+  }
+
+  Future<void> enqueueShelfChange(
+    String shelfId,
+    String bookId, {
+    required bool added,
+  }) async {
+    final queue = await _read();
+    final changes = Map<String, dynamic>.from(
+      (queue['shelves'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    changes['$shelfId:$bookId'] = {
+      'shelfId': shelfId,
+      'bookId': bookId,
+      'added': added,
+    };
+    queue['shelves'] = changes;
+    await _write(queue);
+  }
+
+  Future<void> flush(StoryStackApi api) {
+    final activeFlush = _flushFuture;
+    if (activeFlush != null) return activeFlush;
+    final nextFlush = _flush(api);
+    _flushFuture = nextFlush;
+    return nextFlush.whenComplete(() {
+      if (identical(_flushFuture, nextFlush)) _flushFuture = null;
+    });
+  }
+
+  Future<void> _flush(StoryStackApi api) async {
     final queue = await _read();
     final progress = Map<String, dynamic>.from(
       (queue['progress'] as Map?)?.cast<String, dynamic>() ?? {},
@@ -6414,6 +6656,44 @@ class OfflineSyncQueue {
       }
     }
     queue['progress'] = progress;
+
+    final library = Map<String, dynamic>.from(
+      (queue['library'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    for (final entry in library.entries.toList()) {
+      try {
+        if (entry.value == true) {
+          await api.addToLibrary(entry.key);
+        } else {
+          await api.removeFromLibrary(entry.key);
+        }
+        library.remove(entry.key);
+      } catch (_) {
+        break;
+      }
+    }
+    queue['library'] = library;
+
+    final shelves = Map<String, dynamic>.from(
+      (queue['shelves'] as Map?)?.cast<String, dynamic>() ?? {},
+    );
+    for (final entry in shelves.entries.toList()) {
+      final item = Map<String, dynamic>.from(entry.value as Map);
+      try {
+        if (item['added'] == true) {
+          await api.addBookToShelf('${item['shelfId']}', '${item['bookId']}');
+        } else {
+          await api.removeBookFromShelf(
+            '${item['shelfId']}',
+            '${item['bookId']}',
+          );
+        }
+        shelves.remove(entry.key);
+      } catch (_) {
+        break;
+      }
+    }
+    queue['shelves'] = shelves;
 
     final creates = ((queue['bookmarkCreates'] as List?) ?? const [])
         .map((item) => Map<String, dynamic>.from(item as Map))
@@ -6469,14 +6749,15 @@ class StoryStackApi {
   Future<void> restore() async {
     current = this;
     final prefs = await SharedPreferences.getInstance();
-    serverUrl = prefs.getString('serverUrl') ?? _defaultServerUrl;
+    final savedServerUrl = prefs.getString('serverUrl');
+    serverUrl = savedServerUrl == null || savedServerUrl.trim().isEmpty
+        ? _defaultServerUrl
+        : normalizeServerAddress(savedServerUrl);
     cookie = await _secureStorage.read(key: 'story_stack_session');
   }
 
   Future<void> setServerUrl(String value) async {
-    serverUrl = value.endsWith('/')
-        ? value.substring(0, value.length - 1)
-        : value;
+    serverUrl = normalizeServerAddress(value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('serverUrl', serverUrl);
   }
@@ -6493,16 +6774,12 @@ class StoryStackApi {
   String audioTrackPath(String bookId, int trackIndex) =>
       '/media/books/${Uri.encodeComponent(bookId)}/audio/$trackIndex';
   String mediaUrlAt(String baseUrl, String path) {
-    final cleanBase = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
+    final cleanBase = normalizeServerAddress(baseUrl, defaultScheme: 'http');
     return '$cleanBase$path';
   }
 
   Future<bool> isReachableAt(String baseUrl) async {
-    final cleanBase = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
+    final cleanBase = normalizeServerAddress(baseUrl, defaultScheme: 'http');
     try {
       final response = await _client
           .get(Uri.parse('$cleanBase/api/health'))
@@ -7505,7 +7782,7 @@ class LocalDeviceLibraryStore {
       status:
           durationSeconds != null &&
               durationSeconds > 0 &&
-              positionSeconds >= durationSeconds
+              shouldMarkProgressFinished(positionSeconds, durationSeconds)
           ? ProgressStatus.finished
           : positionSeconds > 0
           ? ProgressStatus.inProgress
@@ -8622,12 +8899,14 @@ class PlaybackProgress {
     required this.positionSeconds,
     required this.status,
     this.durationSeconds,
+    this.updatedAt,
   });
   final String userId;
   final String bookId;
   final double positionSeconds;
   final double? durationSeconds;
   final ProgressStatus status;
+  final String? updatedAt;
   factory PlaybackProgress.fromJson(Map<String, dynamic> json) =>
       PlaybackProgress(
         userId: '${json['userId']}',
@@ -8639,6 +8918,7 @@ class PlaybackProgress {
             : json['status'] == 'in_progress' || json['status'] == 'inProgress'
             ? ProgressStatus.inProgress
             : ProgressStatus.notStarted,
+        updatedAt: json['updatedAt'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -8647,6 +8927,7 @@ class PlaybackProgress {
     'positionSeconds': positionSeconds,
     'durationSeconds': durationSeconds,
     'status': status == ProgressStatus.inProgress ? 'in_progress' : status.name,
+    'updatedAt': updatedAt,
   };
 }
 

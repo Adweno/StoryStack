@@ -6,6 +6,7 @@ describe("OfflineBookCache", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     Reflect.deleteProperty(window, "caches");
+    window.localStorage.clear();
   });
 
   it("saves audio and cover responses in browser cache storage", async () => {
@@ -15,9 +16,19 @@ describe("OfflineBookCache", () => {
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("data")));
 
-    await new OfflineBookCache().save(bookFixture({ coverPath: "/covers/book.jpg" }));
+    await new OfflineBookCache().save(bookFixture({ coverPath: "/covers/book.jpg" }), { manifest: manifestFixture() });
 
     expect(cache.puts).toEqual(["/media/books/offline_book/audio", "/media/books/offline_book/cover"]);
+  });
+
+  it("rejects audio that does not match the verified manifest", async () => {
+    const cache = new FakeCache();
+    Object.defineProperty(window, "caches", { configurable: true, value: { open: vi.fn(async () => cache) } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("oops")));
+
+    await expect(new OfflineBookCache().save(bookFixture(), { manifest: manifestFixture() })).rejects.toThrow("integrity verification");
+    expect(cache.puts).toEqual([]);
+    await expect(new OfflineBookCache().has("offline_book")).resolves.toBe(false);
   });
 
   it("returns a cached blob url for playback when audio is saved", async () => {
@@ -80,5 +91,16 @@ function bookFixture(overrides: Partial<Book> = {}): Book {
     genres: [],
     hidden: false,
     ...overrides
+  };
+}
+
+function manifestFixture() {
+  return {
+    bookId: "offline_book",
+    tracks: [{
+      url: "/media/books/offline_book/audio",
+      bytes: 4,
+      sha256: "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+    }]
   };
 }

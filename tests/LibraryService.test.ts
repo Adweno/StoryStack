@@ -167,14 +167,24 @@ describe("LibraryService", () => {
     await expect(service.removeBookFromShelf("user_1", managed.id, sampleBook.id)).rejects.toThrow("managed automatically");
   });
 
-  it("does not mark progress finished while any time remains", async () => {
+  it("keeps progress active at and above three minutes remaining", async () => {
     const repository = new MemoryLibraryRepository();
     const service = new LibraryService(repository);
 
-    const progress = await service.updateProgress("user_1", sampleBook.id, 571, 600);
+    const progress = await service.updateProgress("user_1", sampleBook.id, 420, 600);
 
     expect(progress.status).toBe("in_progress");
     expect(repository.progress[0].status).toBe("in_progress");
+  });
+
+  it("marks progress finished only within the final three minutes", async () => {
+    const repository = new MemoryLibraryRepository();
+    const service = new LibraryService(repository);
+
+    const progress = await service.updateProgress("user_1", sampleBook.id, 421, 600);
+
+    expect(progress.status).toBe("finished");
+    expect(repository.progress[0].status).toBe("finished");
   });
 
   it("marks progress finished only when playback reaches the full duration", async () => {
