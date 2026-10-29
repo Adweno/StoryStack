@@ -417,25 +417,48 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
 
     private fun saveCurrentProgress(finished: Boolean) {
         val book = currentBook ?: return
-        val positionSeconds = try {
-            if (finished) (player?.duration ?: 0L) / 1000.0 else (player?.currentPosition ?: 0L) / 1000.0
-        } catch (_: Exception) {
-            0.0
-        }
-        val durationSeconds = try {
-            val playerDuration = player?.duration ?: 0L
-            if (playerDuration > 0) playerDuration / 1000.0 else book.durationSeconds?.toDouble()
-        } catch (_: Exception) {
-            book.durationSeconds?.toDouble()
-        }
+        val (positionSeconds, durationSeconds) = wholeBookProgress(book, finished)
         flutterPrefs().edit()
             .putLong("flutter.androidAutoPendingProgress_${book.id}", positionSeconds.toLong())
+            .apply {
+                if (durationSeconds != null) {
+                    putLong("flutter.androidAutoPendingDuration_${book.id}", durationSeconds.toLong())
+                }
+            }
             .commit()
-        if (durationSeconds != null && finished) {
-            flutterPrefs().edit()
-                .putLong("flutter.androidAutoPendingProgress_${book.id}", durationSeconds.toLong())
-                .commit()
+    }
+
+    private fun wholeBookProgress(book: AutoBook, finished: Boolean): Pair<Double, Double?> {
+        val activePlayer = player
+        val hasCompleteTrackDurations = book.trackDurationsSeconds.size == book.audioTrackCount &&
+            book.audioTrackCount > 0
+        val trackDurationsMs = if (hasCompleteTrackDurations) {
+            book.trackDurationsSeconds.map { it * 1000L }
+        } else {
+            emptyList()
         }
+        val declaredDurationMs = trackDurationsMs.sum().takeIf { it > 0L }
+            ?: book.durationSeconds?.times(1000L)
+        if (finished) {
+            val duration = declaredDurationMs ?: activePlayer?.duration?.takeIf { it > 0L }
+            return Pair((duration ?: 0L) / 1000.0, duration?.div(1000.0))
+        }
+
+        val currentPositionMs = try {
+            activePlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+        val currentIndex = try {
+            activePlayer?.currentMediaItemIndex?.coerceAtLeast(0) ?: 0
+        } catch (_: Exception) {
+            0
+        }
+        val precedingDurationMs = trackDurationsMs
+            .take(currentIndex.coerceAtMost(trackDurationsMs.size))
+            .sum()
+        val positionMs = precedingDurationMs + currentPositionMs
+        return Pair(positionMs / 1000.0, declaredDurationMs?.div(1000.0))
     }
 
     private fun flutterPrefs(): SharedPreferences {
@@ -583,6 +606,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         val publicationYear: Int?,
         val durationSeconds: Int?,
         val audioTrackCount: Int,
+        val trackDurationsSeconds: List<Long>,
         val localTrackPaths: List<String>
     ) {
         val isLocalDevice: Boolean
@@ -591,6 +615,19 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
         companion object {
             fun fromJson(json: JSONObject): AutoBook {
                 val tracks = json.optJSONArray("audioTracks")
+                val trackDurationsSeconds = if (tracks != null) {
+                    (0 until tracks.length()).mapNotNull { index ->
+                        tracks.optJSONObject(index)?.let { track ->
+                            if (track.has("durationSeconds") && !track.isNull("durationSeconds")) {
+                                track.optLong("durationSeconds").takeIf { it > 0L }
+                            } else {
+                                null
+                            }
+                        }
+                    }
+                } else {
+                    emptyList()
+                }
                 val localTrackPaths = if (json.optString("id").startsWith("local_") && tracks != null) {
                     (0 until tracks.length()).mapNotNull { index ->
                         tracks.optJSONObject(index)?.optString("path")?.takeIf { it.isNotBlank() }
@@ -609,6 +646,7 @@ class StoryStackAutoService : MediaBrowserServiceCompat() {
                     durationSeconds = optIntOrNull(json, "durationSeconds"),
                     audioTrackCount = (tracks?.length() ?: 0).takeIf { it > 0 }
                         ?: json.optInt("audioTrackCount", 1),
+                    trackDurationsSeconds = trackDurationsSeconds,
                     localTrackPaths = localTrackPaths
                 )
             }

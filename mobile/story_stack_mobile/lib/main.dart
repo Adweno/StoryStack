@@ -1266,8 +1266,11 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
       final nativePosition = prefs.getInt('androidAutoPendingProgress_$bookId');
       if (nativePosition == null) continue;
       final book = booksById[bookId];
+      final nativeDuration = prefs.getInt('androidAutoPendingDuration_$bookId');
       final duration =
-          merged[bookId]?.durationSeconds ?? book?.durationSeconds?.toDouble();
+          nativeDuration?.toDouble() ??
+          book?.durationSeconds?.toDouble() ??
+          merged[bookId]?.durationSeconds;
       try {
         final saved = localDevice
             ? await localDeviceLibrary.saveProgress(
@@ -1283,6 +1286,7 @@ class _StoryShellState extends State<StoryShell> with WidgetsBindingObserver {
         merged[bookId] = saved;
         await syncQueue.discardProgress(bookId);
         await prefs.remove('androidAutoPendingProgress_$bookId');
+        await prefs.remove('androidAutoPendingDuration_$bookId');
       } catch (_) {
         // Keep the handoff key so a later online app launch can retry it.
       }
